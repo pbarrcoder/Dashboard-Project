@@ -1,0 +1,12 @@
+# Dashboard Overview
+
+1) Displays Golds role as a safe haven asset and hedge to macroeconomic uncertainty -  show gold price vs market performance
+2) Does Bitcoin show similar trends? Compare to gold over time and include volatility / returns
+3) How has golds henging powers performed through economic crashes -  make a graph highlighitng 2008 fin crash and 2020 covid crash and liberation day 2025
+4) Under what condidtions does correlation between Gold and Market change? Crises, inflation, rate hikes, geopolical tension..
+5) Could bicoin potentially replace / complement gold as a hedging asset.
+
+
+1. Compare Gold Prices vs 'uncertainty index' (WSI) and compare returns / correlation. Repeat for Gold Prices vs Market (S&P 500).
+2. Rolling Correlation Graph. X Axis = Time, Y Axis = Corr(Gold, Market). Highlight major events eg COVID, Inflation surge, Liberation Day. Under what conditions do the correlations spile (Fed, geopolitical...)
+3. Scatter plot: Gold Returns vs Uncertainty Index.  X Axis = Uncertainty Index, Y Axis = Gold Returns. Fit regression line and allow user to toggle: Major Events, post-major events...
