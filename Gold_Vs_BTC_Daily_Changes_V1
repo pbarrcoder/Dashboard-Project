@@ -1,0 +1,144 @@
+# Daily Returns Time Series Plot:daily_returns_plot.py
+# Python script to generate a single plot showing the daily percentage returns
+# of Gold and Bitcoin over time, matching the requested style and colors.
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import os
+import numpy as np 
+from datetime import datetime
+
+# --- CONFIGURATION (Ensure these paths are correct for your system) ---
+BASE_PATH = "c:/Users/peter_bkbowcp/OneDrive/Desktop/Dashboard Project/" 
+GOLD_FILE  = BASE_PATH + "Gold Futures Historical Data.csv"
+BTC_FILE   = BASE_PATH + "Bitcoin Historical Data.csv"
+START_DATE = '2011-01-01' 
+
+# List of common column headers for the closing price
+CLOSE_CANDIDATES = ["Close", "Adj Close", "Close*", "Price", "Last", "Close/Last"]
+
+# --- Define Consistent Colors ---
+color_gold = '#E69F00'  # Gold/Orange
+color_btc = '#003366'   # Dark Navy Blue
+
+# --- Helper function to clean quoted, comma-separated numbers ---
+def clean_numeric_series(s):
+    """Removes non-numeric characters (quotes, commas) and converts to float."""
+    return (s.astype(str)
+              .str.replace('"', '', regex=False)
+              .str.replace("'", "", regex=False)
+              .str.replace(",", "", regex=False)
+              .str.strip()
+              .replace("", pd.NA) 
+              .astype(float)
+           )
+
+# --- Helper function to load and clean a single file ---
+def load_and_clean(filename, asset_name):
+    """Loads a CSV, cleans data, sets Date as index, and calculates daily returns."""
+    print(f"Loading {asset_name} data from: {filename}")
+    if not os.path.exists(filename):
+        raise FileNotFoundError(
+            f"ERROR: File not found: '{filename}'. "
+            f"Please ensure the path and filename are correct."
+        )
+
+    df = pd.read_csv(filename, skip_blank_lines=True)
+    df.columns = [c.strip() for c in df.columns]
+
+    date_col = next((c for c in df.columns if c.strip().lower() in ["date", "day", "time"]), None)
+    if date_col is None:
+        raise ValueError(f"No 'Date' column found in {filename}.")
+        
+    close_col = next(
+        (c for c in df.columns for cand in CLOSE_CANDIDATES if c.strip().lower() == cand.strip().lower()), 
+        None
+    )
+    if close_col is None:
+        raise ValueError(f"No closing price column found (e.g., Close, Price) in {filename}.")
+        
+    df["Date"] = pd.to_datetime(
+        df[date_col].astype(str).str.replace('"', '').str.strip(), 
+        errors='coerce',
+        infer_datetime_format=True
+    )
+
+    df["Close"] = clean_numeric_series(df[close_col])
+    
+    # Calculate daily returns as a percentage (required for the plot)
+    df['Daily_Return_Pct'] = df['Close'].pct_change() * 100
+    
+    # Final cleanup and filtering
+    df = df[["Date", "Daily_Return_Pct"]].dropna(subset=["Date", "Daily_Return_Pct"]).sort_values("Date")
+    df = df.set_index("Date")
+    df = df[df.index >= START_DATE]
+    
+    return df.rename(columns={'Daily_Return_Pct': f'Return_{asset_name}'})
+
+# --- Main Plotting Function ---
+def plot_daily_returns():
+    
+    try:
+        # Load Gold and BTC files
+        gold_df = load_and_clean(GOLD_FILE, 'Gold')
+        btc_df  = load_and_clean(BTC_FILE, 'BTC')
+            
+    except Exception as e:
+        print(f"An error occurred during file loading: {e}")
+        return
+
+    # 1. Merge data on common dates (only need returns)
+    combined = pd.merge(gold_df[[f'Return_Gold']], 
+                        btc_df[[f'Return_BTC']], 
+                        left_index=True, right_index=True, how="inner").dropna()
+    
+    if combined.empty:
+        print(f"ERROR: No common dates found across the required files after {START_DATE}.")
+        return
+    
+    
+    # --- Plotting Setup: Single Panel ---
+    plt.style.use('default') 
+    fig, ax1 = plt.subplots(1, 1, figsize=(10, 8)) 
+    
+    # --- Daily Returns Over Time (Line Plot) ---
+    
+    # Plot Bitcoin (Navy Blue)
+    ax1.plot(
+        combined.index, 
+        combined['Return_BTC'], 
+        label="Bitcoin", 
+        color=color_btc, 
+        linewidth=0.8,
+        alpha=0.8
+    )
+    
+    # Plot Gold (Orange) - Thicker line to stand out
+    ax1.plot(
+        combined.index, 
+        combined['Return_Gold'], 
+        label="Gold", 
+        color=color_gold, 
+        linewidth=1.5,
+        alpha=0.9
+    )
+    
+    ax1.set_ylabel("Returns (%)", fontsize=14)
+    ax1.set_xlabel("Time", fontsize=14)
+    ax1.set_title(
+        f"Daily Returns of Bitcoin and Gold (Since {START_DATE})", 
+        fontsize=16, 
+        fontweight='bold', 
+        pad=10
+    )
+    ax1.legend(fontsize=10, loc='upper right')
+    ax1.tick_params(axis='both', which='major', labelsize=12)
+    ax1.spines['right'].set_visible(False) # Remove top/right border for clean look
+    ax1.spines['top'].set_visible(False)
+    
+    plt.tight_layout()
+    plt.show()
+
+
+if __name__ == "__main__":
+    plot_daily_returns()
