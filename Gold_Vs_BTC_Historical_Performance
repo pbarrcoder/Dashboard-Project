@@ -1,0 +1,191 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import os
+import numpy as np 
+from datetime import datetime
+from matplotlib.ticker import ScalarFormatter # Import the necessary formatter
+
+# --- CONFIGURATION (Change these file paths as needed) ---
+# NOTE: Using absolute paths to prevent File Not Found errors.
+BASE_PATH = "c:/Users/peter_bkbowcp/OneDrive/Desktop/Dashboard Project/" 
+
+GOLD_FILE  = BASE_PATH + "Gold Futures Historical Data.csv"
+BTC_FILE   = BASE_PATH + "Bitcoin Historical Data.csv"
+# SP500_FILE is no longer required as the Alpha feature has been removed.
+
+START_DATE = '2011-01-01' # Starting date for the analysis
+TRADING_DAYS_PER_YEAR = 252 # Used for annualizing returns/volatility
+
+# List of common column headers for the closing price
+CLOSE_CANDIDATES = ["Close", "Adj Close", "Close*", "Price", "Last", "Close/Last"]
+
+# --- Helper function to clean quoted, comma-separated numbers ---
+def clean_numeric_series(s):
+    """Removes non-numeric characters (quotes, commas) and converts to float."""
+    return (s.astype(str)
+              .str.replace('"', '', regex=False)
+              .str.replace("'", "", regex=False)
+              .str.replace(",", "", regex=False)
+              .str.strip()
+              .replace("", pd.NA) # Replace empty strings with NA
+              .astype(float)
+           )
+
+# --- Helper function to load and clean a single file ---
+def load_and_clean(filename, asset_name):
+    """Loads a CSV, cleans data, sets Date as index, and converts prices to float."""
+    print(f"Loading {asset_name} data from: {filename}")
+    if not os.path.exists(filename):
+        # Raise a more descriptive error based on the absolute path
+        raise FileNotFoundError(
+            f"ERROR: File not found: '{filename}'. "
+            f"Please ensure the path and filename are correct."
+        )
+
+    df = pd.read_csv(filename, skip_blank_lines=True)
+    df.columns = [c.strip() for c in df.columns]
+
+    date_col = next((c for c in df.columns if c.strip().lower() in ["date", "day", "time"]), None)
+    if date_col is None:
+        raise ValueError(f"No 'Date' column found in {filename}.")
+        
+    close_col = next(
+        (c for c in df.columns for cand in CLOSE_CANDIDATES if c.strip().lower() == cand.strip().lower()), 
+        None
+    )
+    if close_col is None:
+        raise ValueError(f"No closing price column found (e.g., Close, Price) in {filename}.")
+        
+    df["Date"] = pd.to_datetime(
+        df[date_col].astype(str).str.replace('"', '').str.strip(), 
+        errors='coerce',
+        infer_datetime_format=True
+    )
+
+    df["Close"] = clean_numeric_series(df[close_col])
+    
+    # Calculate daily returns for statistics later
+    df['Daily_Return'] = df['Close'].pct_change()
+    
+    # Set Date as index for time series calculations and filter by START_DATE
+    df = df[["Date", "Close", "Daily_Return"]].dropna(subset=["Date", "Close"]).sort_values("Date")
+    df = df.set_index("Date")
+    df = df[df.index >= START_DATE]
+    
+    # Calculate Cumulative Return Index (100 at start) - not used in this plot, but good for reference
+    if not df.empty and df.iloc[0]['Close'] != 0:
+        df[f'Index_{asset_name}'] = (df['Close'] / df['Close'].iloc[0]) * 100
+    else:
+        df[f'Index_{asset_name}'] = 100
+    
+    return df.rename(columns={'Close': f'Close_{asset_name}', 'Daily_Return': f'Return_{asset_name}'})
+
+# --- Main Plotting Function ---
+def plot_gold_btc_dashboard():
+    
+    try:
+        # Load Gold and BTC files
+        gold_df = load_and_clean(GOLD_FILE, 'Gold')
+        btc_df  = load_and_clean(BTC_FILE, 'BTC')
+            
+    except Exception as e:
+        print(f"An error occurred during file loading: {e}")
+        return
+
+    # 1. Merge data on common dates (only need returns and closes)
+    combined = pd.merge(gold_df[[f'Close_Gold', 'Return_Gold']], 
+                        btc_df[[f'Close_BTC', 'Return_BTC']], 
+                        left_index=True, right_index=True, how="inner")
+    
+    if combined.empty:
+        print(f"ERROR: No common dates found across the required files after {START_DATE}.")
+        return
+    
+    # 2. Calculate Statistics
+    daily_returns = combined[['Return_Gold', 'Return_BTC']].dropna()
+    
+    gold_mean = daily_returns["Return_Gold"].mean() * TRADING_DAYS_PER_YEAR * 100
+    gold_std  = daily_returns["Return_Gold"].std() * np.sqrt(TRADING_DAYS_PER_YEAR) * 100
+    btc_mean   = daily_returns["Return_BTC"].mean() * TRADING_DAYS_PER_YEAR * 100
+    btc_std    = daily_returns["Return_BTC"].std() * np.sqrt(TRADING_DAYS_PER_YEAR) * 100
+    correlation = daily_returns["Return_Gold"].corr(daily_returns["Return_BTC"])
+    
+    
+    # --- Plotting Setup: Single Panel ---
+    plt.style.use('default') 
+    # Increased figure width slightly to better match the reference image's aspect ratio
+    fig, ax1_gold = plt.subplots(1, 1, figsize=(18, 8)) 
+    
+    # Define colors
+    color_gold = '#E69F00'  # Gold/Orange
+    color_btc = '#003366'   # Dark Navy Blue (Updated)
+
+    # --- PANEL 1: Dual-Axis Log Price Plot (Gold vs. Bitcoin) ---
+    
+    # Plot Gold Price (Orange, Left Axis)
+    ax1_gold.plot(
+        combined.index, 
+        combined['Close_Gold'], 
+        label="Gold Price (USD per oz)", 
+        color=color_gold, 
+        linewidth=2.5 # Slightly thicker line for emphasis
+    )
+    ax1_gold.set_ylabel("Prices in USD per oz (Gold)", fontsize=14, color=color_gold)
+    ax1_gold.tick_params(axis='y', labelcolor=color_gold)
+    
+    # Fix: Apply ScalarFormatter to remove scientific notation on Gold Y-axis
+    formatter = ScalarFormatter()
+    formatter.set_scientific(False) # Turn off scientific notation
+    ax1_gold.yaxis.set_major_formatter(formatter)
+    ax1_gold.set_yscale('log')
+    # Removed all gridlines
+    
+    # Create Twin Axis for Bitcoin
+    ax1_btc = ax1_gold.twinx()  # Right Y-Axis for Bitcoin
+    ax1_btc.plot(
+        combined.index, 
+        combined['Close_BTC'], 
+        label="Bitcoin Price (USD per BTC)", 
+        color=color_btc, 
+        linewidth=2.5 # Slightly thicker line for emphasis
+    )
+    ax1_btc.set_ylabel("Prices in USD per BTC (Bitcoin)", fontsize=14, color=color_btc)
+    ax1_btc.tick_params(axis='y', labelcolor=color_btc)
+    
+    # Fix: Apply ScalarFormatter to remove scientific notation on Bitcoin Y-axis
+    ax1_btc.yaxis.set_major_formatter(formatter)
+    ax1_btc.set_yscale('log')
+    # Removed all gridlines
+
+    # Title and Legend
+    ax1_gold.set_title(
+        f"Raw Prices of Gold and Bitcoin (Logarithmic Scale from {START_DATE})", 
+        fontsize=16, 
+        fontweight='bold', 
+        pad=10
+    )
+    ax1_gold.set_xlabel("Time", fontsize=14)
+    
+    # Combine and display legends
+    lines1, labels1 = ax1_gold.get_legend_handles_labels()
+    lines2, labels2 = ax1_btc.get_legend_handles_labels()
+    ax1_gold.legend(lines1 + lines2, labels1 + labels2, fontsize=10, loc='upper left') 
+
+    plt.tight_layout()
+    plt.show()
+    
+    # 3. Print Statistics to Console
+    print("\n" + "="*50)
+    print(f"--- Annualized Statistics ({START_DATE} to Present) ---")
+    print("="*50)
+    print(f"| Metric                      | Gold       | Bitcoin    |")
+    print("-" * 50)
+    print(f"| Annualized Mean Return      | {gold_mean:8.2f}% | {btc_mean:8.2f}% |")
+    print(f"| Annualized Std Dev (Vol.) | {gold_std:8.2f}% | {btc_std:8.2f}% |")
+    print("-" * 50)
+    print(f"| Correlation (Gold vs BTC)   | {correlation:18.3f} |")
+    print("="*50 + "\n")
+
+
+if __name__ == "__main__":
+    plot_gold_btc_dashboard()
