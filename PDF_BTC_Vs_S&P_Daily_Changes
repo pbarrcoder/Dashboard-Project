@@ -1,0 +1,172 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import os
+import numpy as np 
+
+# --- Configuration: Using the EXACT filenames you confirmed ---
+SP500_FILE = "S&P 500 Historical Data.csv"
+BTC_FILE   = "Bitcoin Historical Data.csv"
+# Removed reference to GOLD_FILE which caused the FileNotFoundError.
+
+# List of common column headers for the closing price
+CLOSE_CANDIDATES = ["Close", "Adj Close", "Close*", "Price", "Last", "Close/Last"]
+
+# --- Helper function to clean quoted, comma-separated numbers ---
+def clean_numeric_series(s):
+    """Removes non-numeric characters (quotes, commas) and converts to float."""
+    return (s.astype(str)
+              .str.replace('"', '', regex=False)
+              .str.replace("'", "", regex=False)
+              .str.replace(",", "", regex=False)
+              .str.strip()
+              .replace("", pd.NA) # Replace empty strings with NA
+              .astype(float)
+           )
+
+# --- Helper function to load and clean a single file ---
+def load_and_clean(filename):
+    """Loads a CSV, validates existence, finds Date and Close columns, and cleans data."""
+    if not os.path.exists(filename):
+        raise FileNotFoundError(
+            f"ERROR: File not found: '{filename}'. "
+            f"Please ensure the file is in the same directory as the script and the name is spelled exactly right."
+        )
+
+    df = pd.read_csv(filename, skip_blank_lines=True)
+    df.columns = [c.strip() for c in df.columns]
+
+    date_col = next((c for c in df.columns if c.strip().lower() in ["date", "day", "time"]), None)
+    if date_col is None:
+        raise ValueError(f"No 'Date' column found in {filename}.")
+        
+    close_col = next(
+        (c for c in df.columns for cand in CLOSE_CANDIDATES if c.strip().lower() == cand.strip().lower()), 
+        None
+    )
+    if close_col is None:
+        raise ValueError(f"No closing price column found (e.g., Close, Price) in {filename}.")
+        
+    df["Date"] = pd.to_datetime(
+        df[date_col].astype(str).str.replace('"', '').str.strip(), 
+        errors='coerce',
+        infer_datetime_format=True
+    )
+
+    df["Close"] = clean_numeric_series(df[close_col])
+    
+    df = df[["Date", "Close"]].dropna(subset=["Date", "Close"]).sort_values("Date").reset_index(drop=True)
+    return df
+
+# --- Main histogram plotting logic ---
+def plot_daily_change_enhanced():
+    try:
+        sp500 = load_and_clean(SP500_FILE)
+        btc   = load_and_clean(BTC_FILE)
+        
+    except Exception as e:
+        # Re-raise the exception after printing a user-friendly message
+        print(f"An error occurred during file processing: {e}")
+        raise
+
+    combined = pd.merge(sp500, btc, on="Date", how="inner", suffixes=("_SP500", "_BTC"))
+
+    if combined.empty:
+        print("ERROR: No common dates found between the S&P 500 and Bitcoin data files.")
+        return
+
+    combined["SP500_Change"] = combined["Close_SP500"].pct_change() * 100
+    combined["BTC_Change"]   = combined["Close_BTC"].pct_change() * 100 
+
+    # Clean the data of NaNs created by pct_change
+    combined = combined.dropna(subset=["SP500_Change", "BTC_Change"])
+    
+    # --- Histogram Plotting ---
+    plt.style.use('default') 
+    fig, ax = plt.subplots(figsize=(12, 7))
+
+    # Determine appropriate bins for both datasets
+    # Bitcoin has much larger swings, so we consider its full range (e.g., up to +/- 20% or more)
+    min_return = combined["BTC_Change"].min()
+    max_return = combined["BTC_Change"].max()
+    
+    # Create bins with a small width (e.g., 0.5%) for a detailed distribution shape
+    # Set the range manually from -20 to 20 for better comparison visualization, like your example image
+    bins = np.arange(-20, 20.5, 0.5) 
+
+    # Plot S&P 500 returns histogram (tab:blue)
+    ax.hist(
+        combined["SP500_Change"],
+        bins=bins,
+        alpha=0.6, # Transparency to see overlap
+        label="S&P 500",
+        color="tab:blue", 
+        density=True,  # Normalize to show probability density
+        edgecolor='white', 
+        linewidth=0.5
+    )
+    
+    # Plot Bitcoin returns histogram (tab:orange)
+    ax.hist(
+        combined["BTC_Change"],
+        bins=bins,
+        alpha=0.6, # Transparency to see overlap
+        label="Bitcoin",
+        color="tab:orange", 
+        density=True, # Normalize to show probability density
+        edgecolor='white', 
+        linewidth=0.5
+    )
+
+    ax.set_xlabel("Daily Returns (%)", fontsize=14, color='black')
+    ax.set_ylabel("Probability Density", fontsize=14, color='black')
+    ax.set_title(
+        "Distribution of Daily Percentage Changes: S&P 500 vs Bitcoin", 
+        fontsize=16, 
+        fontweight='bold', 
+        pad=20
+    )
+    
+    # Set X-axis limits to match the manual bin range
+    ax.set_xlim(-20, 20)
+    
+    ax.legend(fontsize=12, loc='upper right') 
+    ax.tick_params(axis='both', which='major', labelsize=10)
+    
+    # Ensure no gridlines are present
+    ax.grid(False) 
+
+    plt.tight_layout()
+    plt.show()
+    
+    # Return the combined DataFrame for statistics calculation in the main block
+    return combined
+
+if __name__ == "__main__":
+    try:
+        data = plot_daily_change_enhanced()
+        
+        # --- Calculate and Print Statistics ---
+        if data is not None and not data.empty:
+            # Note: Statistics are calculated on the raw daily changes
+            sp500_mean = data["SP500_Change"].mean()
+            sp500_std  = data["SP500_Change"].std()
+            btc_mean   = data["BTC_Change"].mean()
+            btc_std    = data["BTC_Change"].std()
+            correlation = data["SP500_Change"].corr(data["BTC_Change"])
+            
+            stats_text = (
+                f"\n--- Daily Return Statistics ---\n"
+                f"S&P 500 Mean: {sp500_mean:.3f}%\n"
+                f"S&P 500 Std Dev: {sp500_std:.3f}%\n"
+                f"BTC Mean: {btc_mean:.3f}%\n"
+                f"BTC Std Dev: {btc_std:.3f}%\n"
+                f"Correlation (S&P 500 vs BTC): {correlation:.3f}\n"
+                f"-------------------------------"
+            )
+            print(stats_text)
+            
+    except FileNotFoundError:
+        # Already handled inside load_and_clean, but useful as a final catch
+        pass
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
