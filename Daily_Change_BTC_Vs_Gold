@@ -1,0 +1,74 @@
+# plot_daily_change_sp500_btc.py
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import os
+
+# --- Configuration: same files as before ---
+SP500_FILE = "S&P 500 Historical Data.csv"
+BTC_FILE   = "Bitcoin Historical Data.csv"
+CLOSE_CANDIDATES = ["Close", "Adj Close", "Close*", "Price", "Last", "Close/Last"]
+
+# --- Helper functions ---
+def clean_numeric_series(s):
+    return (s.astype(str)
+              .str.replace('"', '', regex=False)
+              .str.replace("'", "", regex=False)
+              .str.replace(",", "", regex=False)
+              .str.strip()
+              .replace("", pd.NA)
+              .astype(float)
+           )
+
+def load_and_clean(filename, ticker_label):
+    if not os.path.exists(filename):
+        raise FileNotFoundError(f"File not found: {filename}")
+    df = pd.read_csv(filename, skip_blank_lines=True)
+    df.columns = [c.strip() for c in df.columns]
+
+    date_col = next((c for c in df.columns if c.strip().lower() in ["date", "day", "time"]), None)
+    if date_col is None:
+        raise ValueError(f"No 'Date' column in {filename}")
+    df[date_col] = pd.to_datetime(df[date_col].astype(str).str.replace('"', '').str.strip(), errors='coerce')
+    df = df.rename(columns={date_col: "Date"})
+
+    close_col = next((c for c in df.columns for cand in CLOSE_CANDIDATES if c.strip().lower() == cand.strip().lower()), None)
+    if close_col is None:
+        numeric_cols = [c for c in df.columns if c != "Date" and df[c].astype(str).str.contains(r'[\d]').any()]
+        if numeric_cols:
+            close_col = numeric_cols[0]
+    if close_col is None:
+        raise ValueError(f"No closing price column in {filename}")
+    
+    df["Close"] = clean_numeric_series(df[close_col])
+    df = df[["Date", "Close"]].dropna(subset=["Date", "Close"]).sort_values("Date").reset_index(drop=True)
+    return df
+
+# --- Main plotting function ---
+def plot_daily_change():
+    sp500 = load_and_clean(SP500_FILE, "SP500")
+    btc   = load_and_clean(BTC_FILE, "BTC")
+
+    # Merge on Date (inner join keeps overlapping dates)
+    combined = pd.merge(sp500, btc, on="Date", how="inner", suffixes=("_SP500", "_BTC"))
+
+    # Calculate daily % change
+    combined["SP500_Change"] = combined["Close_SP500"].pct_change() * 100
+    combined["BTC_Change"]   = combined["Close_BTC"].pct_change() * 100
+
+    # Drop first row (NaN from pct_change)
+    combined = combined.dropna(subset=["SP500_Change", "BTC_Change"])
+
+    # Plot daily percentage change
+    plt.figure(figsize=(12,6))
+    plt.plot(combined["Date"], combined["SP500_Change"], label="S&P 500 Daily % Change", color="blue", linewidth=1.5)
+    plt.plot(combined["Date"], combined["BTC_Change"], label="Bitcoin Daily % Change", color="orange", linewidth=1.5)
+    plt.xlabel("Date")
+    plt.ylabel("Daily % Change")
+    plt.title("Daily Percentage Change: S&P 500 vs Bitcoin")
+    plt.legend()
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.show()
+
+if __name__ == "__main__":
+    plot_daily_change()
