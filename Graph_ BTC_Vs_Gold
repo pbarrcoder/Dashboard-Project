@@ -1,0 +1,121 @@
+# plot_comparison.py
+
+import pandas as pd
+import matplotlib.pyplot as plt
+from datetime import timedelta
+import os
+
+# --- Configuration: Use the simple, renamed files ---
+SP500_FILE = "S&P 500 Historical Data.csv"
+BTC_FILE   = "Bitcoin Historical Data.csv"
+CLOSE_CANDIDATES = ["Close", "Adj Close", "Close*", "Price", "Last", "Close/Last"]
+
+# --- Helper function to clean numeric columns ---
+def clean_numeric_series(s):
+    # This function removes commas, quotes, and strips whitespace before converting to float
+    return (s.astype(str)
+              .str.replace('"', '', regex=False)
+              .str.replace("'", "", regex=False)
+              .str.replace(",", "", regex=False)
+              .str.strip()
+              .replace("", pd.NA)
+              .astype(float)
+           )
+
+# --- Helper function to load and clean a file ---
+def load_and_clean(filename, ticker_label):
+    if not os.path.exists(filename):
+        raise FileNotFoundError(f"ERROR: File not found: {filename}. Did you rename it to {ticker_label}.csv?")
+
+    # Read the file
+    df = pd.read_csv(filename, skip_blank_lines=True)
+    df.columns = [c.strip() for c in df.columns]
+
+    # Find the Date column (case-insensitive)
+    date_col = next((c for c in df.columns if c.strip().lower() in ["date", "day", "time"]), None)
+    if date_col is None:
+        raise ValueError(f"Could not find a 'Date' column in {filename}.")
+        
+    # Parse dates
+    df[date_col] = pd.to_datetime(df[date_col].astype(str).str.replace('"', '').str.strip(), errors='coerce', infer_datetime_format=True)
+    df = df.rename(columns={date_col: "Date"})
+
+    # Find the Closing Price column
+    close_col = next((c for c in df.columns for cand in CLOSE_CANDIDATES if c.strip().lower() == cand.strip().lower()), None)
+
+    # Fallback: if 'Close' not found, try to guess the last numeric column
+    if close_col is None:
+        numeric_cols = [c for c in df.columns if c != "Date" and df[c].astype(str).str.contains(r'[\d]').any()]
+        if numeric_cols:
+            close_col = numeric_cols[0] # Take the first numeric-looking column as a guess
+    
+    if close_col is None:
+        raise ValueError(f"Could not find a closing price column in {filename}.")
+
+    # Clean and rename the price column
+    df["Close"] = clean_numeric_series(df[close_col])
+    
+    # Keep only Date and Close, and clean up
+    df = df[["Date", "Close"]].dropna(subset=["Date", "Close"]).sort_values("Date").reset_index(drop=True)
+    return df
+
+# --- Main plotting logic ---
+def plot_data():
+    try:
+        # Load files
+        sp500 = load_and_clean(SP500_FILE, "SP500")
+        btc   = load_and_clean(BTC_FILE, "BTC")
+        print(f"Loaded S&P 500: {len(sp500)} rows. Loaded BTC: {len(btc)} rows.")
+
+    except Exception as e:
+        print(f"An error occurred during file loading: {e}")
+        return
+
+    # Filter to last 10 years from the most recent date in both
+    latest_date = min(sp500["Date"].max(), btc["Date"].max())
+    start_date = latest_date - pd.DateOffset(years=10)
+    
+    sp500 = sp500[sp500["Date"] >= start_date]
+    btc   = btc[btc["Date"] >= start_date]
+    
+    # Merge on Date (inner join keeps only overlapping dates)
+    combined = pd.merge(btc, sp500, on="Date", how="inner", suffixes=("_BTC", "_SP500"))
+
+    if combined.empty:
+        print("ERROR: No overlapping dates found in the last 10 years. Check your date formats.")
+        return
+
+    print(f"Successfully merged {len(combined)} overlapping data points in the last 10 years.")
+
+    # --- Plot RAW Closing Prices ---
+    # BTC's price is much higher, so the S&P 500 will look flat. We use two y-axes for a fair comparison.
+    fig, ax1 = plt.subplots(figsize=(12, 6))
+    
+    # Plot S&P 500 on the left axis (ax1)
+    color = 'tab:blue'
+    ax1.set_xlabel("Date")
+    ax1.set_ylabel("S&P 500 Price (USD)", color=color)
+    ax1.plot(combined["Date"], combined["Close_SP500"], label="S&P 500", color=color, linewidth=1.5)
+    ax1.tick_params(axis='y', labelcolor=color)
+    ax1.grid(True, axis='y', linestyle='--', alpha=0.6)
+
+    # Create a second y-axis for Bitcoin (ax2)
+    ax2 = ax1.twinx()  
+    color = 'tab:orange'
+    ax2.set_ylabel("Bitcoin Price (USD)", color=color)  
+    ax2.plot(combined["Date"], combined["Close_BTC"], label="Bitcoin (BTC-USD)", color=color, linewidth=1.5)
+    ax2.tick_params(axis='y', labelcolor=color)
+
+    # Title and final setup
+    plt.title(f"Bitcoin vs S&P 500 — Daily Closing Prices (Last 10 Years)")
+    fig.tight_layout() 
+    # Combine legends from both axes
+    lines, labels = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax2.legend(lines + lines2, labels + labels2, loc='upper left')
+
+    plt.show()
+
+# Execute the main function
+if __name__ == "__main__":
+    plot_data()
