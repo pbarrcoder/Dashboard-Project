@@ -1,0 +1,98 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.dates import DateFormatter, YearLocator
+
+# --- 1. Data Simulation (Extending to 10 Years) ---
+def generate_simulated_data(n_days=3650, gold_start=1200, vix_start=18):
+    """
+    Generates simulated daily price data for GOLD and VIX over 10 years.
+    This replaces reading an external file, ensuring the script is runnable.
+    """
+    np.random.seed(42)
+    dates = pd.date_range(start='2015-01-01', periods=n_days, freq='D')
+
+    # Simulate GOLD Prices (Moderate growth, low volatility typical of a commodity/safe-haven asset)
+    # Mean return is lower, and scale (volatility) is significantly lower than crypto
+    gold_returns = np.random.normal(loc=0.0002, scale=0.008, size=n_days)
+    gold_prices = gold_start * np.exp(np.cumsum(gold_returns))
+
+    # Simulate VIX Prices (Inverse influence, volatility clusters)
+    vix_returns = np.random.normal(loc=0.00, scale=0.04, size=n_days)
+    
+    # Introduce a slight, often POSITIVE, correlation bias with VIX, but also allowing for
+    # flight-to-safety behavior where VIX spikes and Gold rises (negative correlation).
+    # Gold and VIX correlation is often near zero or weakly positive historically.
+    # We apply a slight positive influence on VIX based on Gold's returns.
+    positive_influence = 0.05 * gold_returns
+    vix_returns = vix_returns + positive_influence
+
+    vix_prices = vix_start * np.exp(np.cumsum(vix_returns))
+
+    # Create the DataFrame
+    df = pd.DataFrame({
+        'GOLD_Close': gold_prices,
+        'VIX_Close': vix_prices
+    }, index=dates)
+
+    return df
+
+# Get the 10-year simulated data
+df = generate_simulated_data()
+
+# --- 2. Calculate Daily Percentage Returns and Rolling 90-Day Correlation ---
+WINDOW_SIZE = 90
+gold_returns = df['GOLD_Close'].pct_change().dropna()
+vix_returns = df['VIX_Close'].pct_change().dropna()
+rolling_corr = gold_returns.rolling(window=WINDOW_SIZE).corr(vix_returns).dropna()
+
+# --- 3. Calculate Key Statistics for Separate Table ---
+mean_corr = rolling_corr.mean()
+median_corr = rolling_corr.median()
+std_corr = rolling_corr.std()
+
+# --- 4. Generate Clean Plot ---
+
+plt.style.use('default')
+fig, ax = plt.subplots(figsize=(16, 7))
+
+# Plot the rolling correlation line
+rolling_corr.plot(
+    ax=ax,
+    color='#FFD700', # Gold color
+    linewidth=2,
+    label=f'{WINDOW_SIZE}-Day Rolling Correlation'
+)
+
+# Highlight the zero line
+ax.axhline(0, color='red', linestyle='--', linewidth=1.2, label='Zero Correlation')
+
+# Add Clear Axis Titles and Title
+ax.set_title(f'10-Year Rolling {WINDOW_SIZE}-Day Correlation: Gold Returns vs VIX Returns', fontsize=16, fontweight='bold', pad=20)
+ax.set_ylabel('Correlation Coefficient (ρ)', fontsize=12)
+ax.set_xlabel('Year', fontsize=12) # Changed label to 'Year'
+
+# --- X-Axis Formatting: Show only the Year ---
+ax.xaxis.set_major_locator(YearLocator())
+ax.xaxis.set_major_formatter(DateFormatter('%Y'))
+ax.tick_params(axis='x', rotation=45) # Rotate for better visibility
+
+# Final Plot Cleanup (Remove gridlines and unnecessary clutter)
+ax.tick_params(axis='both', which='major', labelsize=10)
+ax.legend(loc='lower left', frameon=True)
+ax.grid(False)
+ax.spines['top'].set_visible(False)
+ax.spines['right'].set_visible(False)
+ax.spines['left'].set_linewidth(0.5)
+ax.spines['bottom'].set_linewidth(0.5)
+
+plt.tight_layout()
+plt.show()
+
+# --- 5. Display Statistics in Separate Table/Text Format ---
+print("\n--- Key Statistical Summary of 10-Year Rolling Correlation ---")
+print("| Metric | Value | Interpretation |")
+print("|:---|:---:|:---|")
+print(f"| **Mean Correlation** | **{mean_corr:.4f}** | Shows Gold's typical relationship with VIX over the entire 10-year period. Historically, Gold often has a near-zero or slightly positive correlation with the VIX. |")
+print(f"| **Median Correlation** | **{median_corr:.4f}** | The mid-point of correlation values, less affected by extreme market stress outliers. |")
+print(f"| **Std. Deviation** | **{std_corr:.4f}** | Measures the stability of the correlation, indicating how often Gold shifts between being a weak hedge (negative correlation) and having a similar trend (positive correlation) to VIX. |")
