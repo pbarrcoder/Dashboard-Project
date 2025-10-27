@@ -6,10 +6,10 @@ import os
 import numpy as np 
 from datetime import datetime
 from matplotlib.ticker import ScalarFormatter, FuncFormatter 
+from matplotlib import dates
 import math 
 
 # --- CONFIGURATION (Change these file paths as needed) ---
-# NOTE: Using absolute paths to prevent File Not Found errors.
 # IMPORTANT: Adjust this BASE_PATH to the actual location of your CSV files.
 BASE_PATH = "c:/Users/peter_bkbowcp/OneDrive/Desktop/Dashboard Project/" 
 
@@ -20,14 +20,14 @@ START_DATE = '2011-01-01'
 TRADING_DAYS_PER_YEAR = 252
 
 # Animation Configuration
-# Retained the faster animation speed (50 days per frame)
 STEP_SIZE = 50 # Days revealed per frame (adjust for speed/smoothness)
 
 # List of common column headers for the closing price
 CLOSE_CANDIDATES = ["Close", "Adj Close", "Close*", "Price", "Last", "Close/Last"]
 
-# Global variable to hold the animation object (must be global to prevent garbage collection)
+# Global variables for animation and annotation (Matplotlib objects need to be global)
 ani = None
+annot = None # Global variable to hold the annotation object
 
 # --- Helper function to clean quoted, comma-separated numbers ---
 def clean_numeric_series(s):
@@ -48,7 +48,7 @@ def load_and_clean(filename, asset_name):
     if not os.path.exists(filename):
         raise FileNotFoundError(
             f"ERROR: File not found: '{filename}'. "
-            f"Please ensure the path and filename are correct."
+            f"Please ensure the path and filename is correct."
         )
 
     df = pd.read_csv(filename, skip_blank_lines=True)
@@ -88,59 +88,135 @@ def load_and_clean(filename, asset_name):
 
 # --- Custom Log Formatter ---
 def log_formatter(v, pos):
-    """Formats tick values for logarithmic scale to show real numbers with commas (used for BTC and Gold)."""
-    # Formats the tick value (v) without scientific notation, adding commas for large numbers
-    return f"{v:,.0f}" if v >= 1 else f"{v:,.2f}" # Format integers with commas
+    """Formats tick values for logarithmic scale to show real numbers with commas."""
+    # Format integers with commas (or two decimals if less than 1)
+    return f"{v:,.0f}" if v >= 1 else f"{v:,.2f}" 
+
+# --- Hover Annotation Functions ---
+
+def update_annot(index, combined, annot):
+    """Updates the position and text of the annotation object."""
+    # Get values for the closest index
+    date = combined.index[index].strftime('%Y-%m-%d')
+    gold_price = combined['Close_Gold'].iloc[index]
+    btc_price = combined['Close_BTC'].iloc[index]
+    
+    # x_pos is the Matplotlib numerical date, y_pos is Gold price (used as anchor for placement)
+    x_pos = dates.date2num(combined.index[index].to_pydatetime())
+    y_pos_gold = gold_price
+    
+    # Format the text with proper numbers
+    text = (f"Date: {date}\n"
+            f"Gold: ${gold_price:,.2f}\n" # Format Gold with 2 decimals
+            f"BTC: ${btc_price:,.0f}")  # Format BTC with 0 decimals (usually large integers)
+
+    # Update annotation position and text
+    annot.xy = (x_pos, y_pos_gold)
+    annot.set_text(text)
+    
+    # Adjust position slightly for better visibility
+    annot.get_bbox_patch().set_alpha(0.9)
+
+
+def hover(event, combined, ax1_gold, date_nums):
+    """Callback function for mouse motion event."""
+    global annot
+    global ani
+
+    # 1. Check if the mouse is over the main plot area
+    if event.inaxes != ax1_gold:
+        if annot and annot.get_visible():
+            annot.set_visible(False)
+            ax1_gold.figure.canvas.draw_idle()
+        return
+        
+    # 2. Prevent hover updates during animation
+    # Using getattr for a safer check if event_source exists
+    is_animating = ani is not None and getattr(ani.event_source, 'running', False)
+    if is_animating:
+        return 
+
+    xdata_mouse = event.xdata
+    
+    if xdata_mouse is None:
+        # Hide annotation if xdata is null (e.g., hovering over the edge)
+        if annot and annot.get_visible():
+            annot.set_visible(False)
+            ax1_gold.figure.canvas.draw_idle()
+        return
+        
+    # 3. Find the index of the closest data point based on the date (x-axis)
+    diff = np.abs(date_nums - xdata_mouse)
+    closest_index = np.argmin(diff)
+    
+    # 4. Define a large proximity threshold (e.g., within 45 days)
+    date_unit_threshold = dates.date2num(datetime.now()) - dates.date2num(datetime.now() - pd.Timedelta(days=45))
+    
+    if diff[closest_index] < date_unit_threshold:
+        # Point is close enough, update and show annotation
+        update_annot(closest_index, combined, annot)
+        annot.set_visible(True)
+        ax1_gold.figure.canvas.draw_idle()
+    else:
+        # Point is too far, hide annotation
+        if annot and annot.get_visible():
+            annot.set_visible(False)
+            ax1_gold.figure.canvas.draw_idle()
 
 # --- Animation/Update Function ---
 def animate_frame(i, combined, line_gold, line_btc, ax1_gold, button):
     """Updates the data displayed on the plot for each frame using the frame index 'i'."""
     
-    # Calculate the end index for the current frame: (frame_number + 1) * step_size
     end_index = min((i + 1) * STEP_SIZE, len(combined))
-
-    # Slice the data up to the current frame's end index
     data_slice = combined.iloc[:end_index]
 
     if data_slice.empty:
         return line_gold, line_btc
 
-    # Update Gold line data
+    # Update line data
     line_gold.set_data(data_slice.index, data_slice['Close_Gold'])
-    # Update BTC line data
     line_btc.set_data(data_slice.index, data_slice['Close_BTC'])
 
     # Update the title to show the current date of the animation
     current_date = data_slice.index[-1].strftime('%Y-%m-%d')
     current_scale_text = 'Logarithmic Scale' if ax1_gold.get_yscale() == 'log' else 'Linear Scale'
     
-    # --- UPDATED TITLE ---
+    # --- CONSISTENT TITLE ---
     ax1_gold.set_title(
         f"Gold Vs Bitcoin Growth ({current_scale_text}) up to: {current_date}",
         fontsize=16,
         fontweight='bold',
         pad=10
     )
-    # Print current date to the console for tracking
     print(f"Drawing up to: {current_date}", end='\r')
 
     # Check if this is the final frame and update the button text
     if end_index == len(combined):
         button.label.set_text('Replay Animation')
-        # Ensure the button text updates immediately
         button.ax.figure.canvas.draw_idle() 
     
-    # Return the artists (lines) that were modified
     return line_gold, line_btc
 
-# --- Animation Button Callback Function ---
+# --- Animation Button Callback Function (Infinitely Replayable) ---
 def start_animation_callback(event, combined, fig, ax1_gold, line_gold, line_btc, button):
     """Initializes and starts the FuncAnimation when the button is clicked."""
     global ani
+    global annot
     
-    # 1. Stop any previous animation
+    # 1. Stop and release any previous animation (FIX FOR RE-PRESS)
     if ani:
-        ani.event_source.stop()
+        print("Stopping previous animation...")
+        try:
+            # Check if event_source exists and stop it
+            if ani.event_source:
+                ani.event_source.stop()
+        except:
+            pass 
+        ani = None 
+        
+    # Hide the annotation when animation starts
+    if annot and annot.get_visible():
+        annot.set_visible(False)
     
     # 2. Clear the lines to start from scratch (resets the plot to empty lines)
     line_gold.set_data([], [])
@@ -149,9 +225,9 @@ def start_animation_callback(event, combined, fig, ax1_gold, line_gold, line_btc
     # 3. Update button state and title
     current_scale_text = 'Logarithmic Scale' if ax1_gold.get_yscale() == 'log' else 'Linear Scale'
     button.label.set_text('Animating...')
-    button.ax.figure.canvas.draw_idle() # Redraw button immediately
+    button.ax.figure.canvas.draw_idle() 
 
-    # --- UPDATED TITLE ---
+    # --- CONSISTENT TITLE ---
     ax1_gold.set_title(
         f"Gold Vs Bitcoin Growth ({current_scale_text}) Starting...",
         fontsize=16,
@@ -173,11 +249,10 @@ def start_animation_callback(event, combined, fig, ax1_gold, line_gold, line_btc
         repeat=False
     )
     
-    # Ensure the plot redrawing is triggered
     fig.canvas.draw_idle()
 
-# --- Scale Toggle Button Callback Function (FIXED) ---
-def toggle_scale_callback(event, ax1_gold, ax1_btc, button):
+# --- Scale Toggle Button Callback Function (Infinitely Pressable) ---
+def toggle_scale_callback(event, ax1_gold, ax1_btc, button, combined):
     """Toggles the y-axes between logarithmic and linear scales."""
     global ani 
 
@@ -199,7 +274,6 @@ def toggle_scale_callback(event, ax1_gold, ax1_btc, button):
         formatter_btc.set_scientific(False)
         ax1_btc.yaxis.set_major_formatter(formatter_btc)
         
-        # --- SCIENTIFIC NOTATION FIX ---
         # Force Matplotlib to use plain style on the y-axis (crucial for linear scale)
         ax1_gold.ticklabel_format(axis='y', style='plain')
         ax1_btc.ticklabel_format(axis='y', style='plain')
@@ -215,22 +289,30 @@ def toggle_scale_callback(event, ax1_gold, ax1_btc, button):
         ax1_gold.yaxis.set_major_formatter(FuncFormatter(log_formatter))
         ax1_btc.yaxis.set_major_formatter(FuncFormatter(log_formatter))
         
-    # Update the main title to reflect the new scale
-    if ani is None or not ani.event_source.running:
-         # --- UPDATED TITLE ---
+    # --- FIX: Check if animation is running (safer check) ---
+    # This prevents the static plot title from overriding the animated title
+    # but still allows the scale change to apply instantly.
+    is_animating = ani is not None and getattr(ani.event_source, 'running', False)
+    
+    # Update the main title only if the animation is NOT running (i.e., static view)
+    if not is_animating:
+         current_date_str = combined.index[-1].strftime('%Y-%m-%d')
+         # --- CONSISTENT TITLE ---
          ax1_gold.set_title(
-            f"Gold Vs Bitcoin Growth ({new_scale_text} from {START_DATE})", 
+            f"Gold Vs Bitcoin Growth ({new_scale_text} up to: {current_date_str})", 
             fontsize=16, 
             fontweight='bold', 
             pad=10
         )
 
     # Redraw the figure to apply the scale and formatter changes
+    # This call is CRUCIAL for updating the view when the animation is off.
     ax1_gold.figure.canvas.draw_idle()
 
 
 # --- Main Plotting Function ---
 def plot_gold_btc_dashboard():
+    global annot 
     
     try:
         # Load Gold and BTC files
@@ -250,7 +332,10 @@ def plot_gold_btc_dashboard():
         print(f"ERROR: No common dates found across the required files after {START_DATE}.")
         return
         
-    # 2. Calculate Statistics
+    # --- Data Preparation for Hover ---
+    date_nums = dates.date2num(combined.index.to_numpy())
+        
+    # 2. Calculate Statistics (Unchanged)
     daily_returns = combined[['Return_Gold', 'Return_BTC']].dropna()
     
     gold_mean = daily_returns["Return_Gold"].mean() * TRADING_DAYS_PER_YEAR * 100
@@ -262,13 +347,9 @@ def plot_gold_btc_dashboard():
     # --- Plotting Setup ---
     plt.style.use('default')
     
-    # Create the main axes for the plot
     fig, ax1_gold = plt.subplots(1, 1, figsize=(18, 9)) 
-    
-    # Adjust subplot position to make room for the two buttons and prevent label conflict
     fig.subplots_adjust(bottom=0.12)
 
-    # Define colors
     color_gold = '#E69F00' 
     color_btc = '#003366' 
 
@@ -282,13 +363,11 @@ def plot_gold_btc_dashboard():
         color=color_gold, 
         linewidth=2.5
     )
-    ax1_gold.set_ylabel("Prices in USD per oz (Gold)", fontsize=14, color=color_gold)
+    ax1_gold.set_ylabel("Prices in USD per oz (Gold)", fontsize=16, color=color_gold)
     ax1_gold.tick_params(axis='y', labelcolor=color_gold)
     
     # Apply Logarithmic Scale initially
     ax1_gold.set_yscale('log')
-    
-    # Apply FuncFormatter to Gold Y-Axis for real numbers
     ax1_gold.yaxis.set_major_formatter(FuncFormatter(log_formatter))
     
     # Create Twin Axis for Bitcoin
@@ -300,13 +379,11 @@ def plot_gold_btc_dashboard():
         color=color_btc, 
         linewidth=2.5
     )
-    ax1_btc.set_ylabel("Prices in USD per BTC (Bitcoin)", fontsize=14, color=color_btc)
+    ax1_btc.set_ylabel("Prices in USD per BTC (Bitcoin)", fontsize=16, color=color_btc)
     ax1_btc.tick_params(axis='y', labelcolor=color_btc)
     
     # Apply Logarithmic Scale initially
     ax1_btc.set_yscale('log')
-    
-    # Apply FuncFormatter to Bitcoin Y-Axis for real numbers
     ax1_btc.yaxis.set_major_formatter(FuncFormatter(log_formatter))
     
     # Set fixed limits based on the full data range for smoother animation
@@ -315,9 +392,9 @@ def plot_gold_btc_dashboard():
     ax1_btc.set_ylim(combined['Close_BTC'].min() * 0.9, combined['Close_BTC'].max() * 1.1)
 
     # Title and Legend
-    # --- UPDATED INITIAL STATIC TITLE ---
+    current_date_str = combined.index[-1].strftime('%Y-%m-%d')
     ax1_gold.set_title(
-        f"Gold Vs Bitcoin Growth (Logarithmic Scale from {START_DATE})", 
+        f"Gold Vs Bitcoin Growth (Logarithmic Scale)", 
         fontsize=16, 
         fontweight='bold', 
         pad=10
@@ -329,28 +406,41 @@ def plot_gold_btc_dashboard():
     ax1_gold.legend(lines1 + lines2, labels1 + labels2, fontsize=10, loc='upper left') 
 
     # ------------------------------------------------------------------
+    # --- Hover Annotation Initialization ---
+    # ------------------------------------------------------------------
+    annot = ax1_gold.annotate(
+        "", 
+        xy=(0,0), # Placeholder coordinates
+        xytext=(20, 20), # Offset text from the data point
+        textcoords="offset points",
+        bbox=dict(boxstyle="round,pad=0.5", fc="white", alpha=0.9, ec="black"),
+        arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=0.1", color="black"),
+        ha='left'
+    )
+    annot.set_visible(False)
+    
+    fig.canvas.mpl_connect("motion_notify_event", 
+                           lambda event: hover(event, combined, ax1_gold, date_nums))
+                           
+    # ------------------------------------------------------------------
     # --- Button Implementation ---
     # ------------------------------------------------------------------
 
     # 1. Animation Button (Green, Left Position)
-    # Coordinates: [left, bottom, width, height]
     ax_anim_button = fig.add_axes([0.35, 0.04, 0.18, 0.04]) 
     button_anim = Button(ax_anim_button, 'Start Animation', color='#4CAF50', hovercolor='#66BB6A')
     
-    # Connect the animation callback
     button_anim.on_clicked(lambda event: start_animation_callback(
         event, combined, fig, ax1_gold, line_gold, line_btc, button_anim
     ))
     
     # 2. Scale Toggle Button (Blue, Right Position)
     ax_scale_button = fig.add_axes([0.57, 0.04, 0.18, 0.04]) 
-    
-    # Initial scale is 'log', so button prompts user to switch to 'linear'
     button_scale = Button(ax_scale_button, 'View Linear Scale', color='#2196F3', hovercolor='#4DAAF8')
     
     # Connect the toggle callback
     button_scale.on_clicked(lambda event: toggle_scale_callback(
-        event, ax1_gold, ax1_btc, button_scale
+        event, ax1_gold, ax1_btc, button_scale, combined
     ))
     
     # --- Final Output ---
@@ -371,3 +461,4 @@ def plot_gold_btc_dashboard():
 
 if __name__ == "__main__":
     plot_gold_btc_dashboard()
+
