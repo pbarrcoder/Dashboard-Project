@@ -1,0 +1,376 @@
+# hedge_test.py
+# Goal: Test the ability of a single HEDGE ASSET to reduce the volatility of a single TARGET ASSET.
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from datetime import date
+import os
+import sys
+
+# --- CONFIGURATION ---
+# We are now testing BTC's ability to hedge the S&P 500, which represents the core market risk.
+
+# Target Asset: The asset whose volatility you are trying to reduce (S&P 500).
+TARGET_FILE = "S&P Historical Data.csv"
+TARGET_ASSET_NAME = "SP500"
+
+# Hedge Asset: The asset you use to reduce the volatility of the Target Asset (Bitcoin).
+HEDGE_FILE = "Bitcoin Historical Data.csv"
+HEDGE_ASSET_NAME = "BTC" 
+
+DEFAULT_START_DATE = '2017-01-01'
+DEFAULT_END_DATE = date.today().strftime('%Y-%m-%d')
+
+# Financial Constants
+TRADING_DAYS_PER_YEAR = 252
+ROLLING_WINDOW_DAYS = 180 
+
+# Output Files (Will use the asset names for clear output)
+PLOT_FILENAME = f"{TARGET_ASSET_NAME}_hedged_by_{HEDGE_ASSET_NAME}_VR_plot.png"
+STATS_FILENAME = f"{TARGET_ASSET_NAME}_hedged_by_{HEDGE_ASSET_NAME}_stats_table.csv"
+
+# Plot Colors
+COLOR_HEDGED = '#2ca02c' # Green for success/focus
+COLOR_ZERO = '#d62728' # Red line for zero
+
+# List of common column headers for the closing price
+CLOSE_CANDIDATES = ["Close", "Adj Close", "Close*", "Price", "Last", "Close/Last"]
+
+# --- UTILITIES ---
+
+def clean_numeric_series(s):
+    """Removes non-numeric characters (quotes, commas) and converts to float."""
+    return (s.astype(str)
+              .str.replace('"', '', regex=False)
+              .str.replace("'", "", regex=False)
+              .str.replace(",", "", regex=False)
+              .str.strip()
+              .replace(["", "nan", "NaN"], np.nan) 
+              .astype(float)
+           )
+
+def load_and_clean(filepath, asset_name):
+    """Loads a CSV, cleans data, sets Date as index, and converts prices to float."""
+    # Check for file existence first
+    if not os.path.exists(filepath):
+        # We explicitly raise an error if the file isn't found
+        raise FileNotFoundError(
+            f"ERROR: File not found: '{filepath}'. "
+            f"Please ensure the file is correctly named and placed in the script's directory."
+        )
+
+    df = pd.read_csv(filepath, skip_blank_lines=True)
+    df.columns = [c.strip() for c in df.columns]
+
+    date_col = next((c for c in df.columns if c.strip().lower() in ["date", "day", "time"]), None)
+    if date_col is None:
+        raise ValueError(f"No 'Date' column found in {filepath}.")
+        
+    close_col = next(
+        (c for c in df.columns for cand in CLOSE_CANDIDATES if c.strip().lower() == cand.strip().lower()), 
+        None
+    )
+    if close_col is None:
+        raise ValueError(f"No closing price column found (e.g., Close, Price) in {filepath}.")
+        
+    # FIX: Removed deprecated 'infer_datetime_format=True'
+    df["Date"] = pd.to_datetime(
+        df[date_col].astype(str).str.replace('"', '').str.strip(), 
+        errors='coerce'
+    )
+
+    df["Close"] = clean_numeric_series(df[close_col])
+    
+    df = df[["Date", "Close"]].dropna(subset=["Date", "Close"]).sort_values("Date")
+    df = df.set_index("Date").rename(columns={'Close': f'Close_{asset_name}'})
+    return df
+
+def get_data(target_file, hedge_file, target_name, hedge_name, start_date, end_date):
+    """Loads Target and Hedge data, calculates log returns, and merges results."""
+    
+    print(f"Loading data for Target ({target_name}) and Hedge ({hedge_name}) from local CSVs...")
+    
+    # Get the directory where this script is located
+    try:
+        script_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+    except IndexError:
+        script_dir = os.getcwd() 
+        
+    target_filepath = os.path.join(script_dir, target_file)
+    hedge_filepath = os.path.join(script_dir, hedge_file)
+    
+    print(f"Looking for files in directory: {script_dir}")
+    
+    try:
+        target_raw = load_and_clean(target_filepath, target_name)
+        hedge_raw = load_and_clean(hedge_filepath, hedge_name)
+    except FileNotFoundError:
+        # Re-raise the error cleanly
+        raise 
+
+    # Merge the two data sets on common dates
+    combined = pd.merge(target_raw, hedge_raw, left_index=True, right_index=True, how="inner")
+    
+    if combined.empty:
+        raise ValueError("No common dates found between the two data files after cleaning.")
+
+    combined = combined[combined.index >= start_date]
+
+    if combined.empty:
+        raise ValueError(f"No data found after {start_date}. Check file dates.")
+
+    # Calculate log returns: r_t = ln(P_t / P_{t-1})
+    log_returns = pd.DataFrame(index=combined.index)
+    log_returns[f'r_{target_name}'] = np.log(combined[f'Close_{target_name}'] / combined[f'Close_{target_name}'].shift(1))
+    log_returns[f'r_{hedge_name}'] = np.log(combined[f'Close_{hedge_name}'] / combined[f'Close_{hedge_name}'].shift(1))
+    
+    log_returns = log_returns.dropna()
+
+    print(f"Data ready. Total observations: {len(log_returns)}")
+    return log_returns
+
+# --- CORE HEDGING LOGIC (NEW: Single Direction) ---
+
+def calculate_rolling_vr(returns_df, target_ticker, hedge_ticker, window=ROLLING_WINDOW_DAYS):
+    """
+    Computes the rolling minimum-variance hedge ratio (beta) and Variance Reduction (VR%).
+    Beta = Cov(Target, Hedge) / Var(Hedge)
+    """
+    r_target = returns_df[f'r_{target_ticker}']
+    r_hedge = returns_df[f'r_{hedge_ticker}']
+    
+    # 1. Calculate Rolling Covariance and Rolling Variance
+    cov_rolling = r_target.rolling(window=window).cov(r_hedge)
+    var_hedge_rolling = r_hedge.rolling(window=window).var()
+    
+    # 2. Calculate Rolling Beta (Minimum-Variance Hedge Ratio)
+    # Beta = Cov(Target, Hedge) / Var(Hedge)
+    beta_rolling = cov_rolling / var_hedge_rolling
+    
+    # 3. Calculate Rolling Hedged Returns
+    # r_hedged = r_target - Beta * r_hedge
+    r_hedged_rolling = r_target - beta_rolling * r_hedge
+    
+    # 4. Calculate Rolling Variances
+    var_hedged_rolling = r_hedged_rolling.rolling(window=window).var()
+    var_unhedged_rolling = r_target.rolling(window=window).var()
+    
+    # 5. Calculate Rolling Variance Reduction (%)
+    # VR% = 100 * (1 - Var_hedged / Var_unhedged)
+    vr_pct_rolling = 100 * (1 - var_hedged_rolling / var_unhedged_rolling)
+    
+    # Clean up any infinites/NaNs resulting from division by zero or empty windows
+    vr_pct_rolling.replace([np.inf, -np.inf], np.nan, inplace=True)
+    beta_rolling.replace([np.inf, -np.inf], np.nan, inplace=True)
+    
+    return vr_pct_rolling.rename('VR_pct'), beta_rolling.rename('Beta')
+
+# --- STATISTICS LOGIC (Single Direction) ---
+
+def calculate_static_and_rolling_stats(returns_df, target, hedge, window=ROLLING_WINDOW_DAYS):
+    """Calculates all static and rolling metrics for the summary table (single direction)."""
+    
+    r_target = returns_df[f'r_{target}']
+    r_hedge = returns_df[f'r_{hedge}']
+    
+    results = {}
+    direction_name = f'{target}_hedged_by_{hedge}'
+
+    # --- 1. Static Beta & Variance (Using full historical data) ---
+    static_cov = r_target.cov(r_hedge)
+    static_var_hedge = r_hedge.var()
+    static_beta = static_cov / static_var_hedge if static_var_hedge != 0 else np.nan
+    static_var_un = np.var(r_target, ddof=1)
+    
+    r_hedged_static = r_target - static_beta * r_hedge
+    static_var_hedged = np.var(r_hedged_static, ddof=1)
+    
+    static_variance_reduction_pct = 100 * (1 - static_var_hedged / static_var_un)
+
+    # --- 2. Rolling VR Statistics ---
+    vr_series, _ = calculate_rolling_vr(returns_df, target, hedge, window)
+    
+    vr_series_trimmed = vr_series.dropna()
+    
+    if vr_series_trimmed.empty:
+        rolling_mean_vr_pct, rolling_median_vr_pct, rolling_std_vr_pct = np.nan, np.nan, np.nan
+    else:
+        rolling_mean_vr_pct = vr_series_trimmed.mean()
+        rolling_median_vr_pct = vr_series_trimmed.median()
+        rolling_std_vr_pct = vr_series_trimmed.std()
+    
+    # --- 3. Annualized Returns/Volatility (Original and Hedged) ---
+    orig_mean_return_pct_ann = 100 * r_target.mean() * TRADING_DAYS_PER_YEAR
+    orig_vol_pct_ann = 100 * r_target.std() * np.sqrt(TRADING_DAYS_PER_YEAR)
+    
+    hedged_mean_return_pct_ann = 100 * r_hedged_static.mean() * TRADING_DAYS_PER_YEAR
+    hedged_vol_pct_ann = 100 * r_hedged_static.std() * np.sqrt(TRADING_DAYS_PER_YEAR)
+    
+    # --- 4. VaR and CVaR (Original and Hedged) ---
+    def compute_risk(r_series):
+        # VaR (5th percentile)
+        var_pct = -np.percentile(r_series, 5) * 100
+        # CVaR (Mean of returns worse than VaR)
+        cvar_pct = -r_series[r_series <= np.percentile(r_series, 5)].mean() * 100
+        return var_pct, cvar_pct
+    
+    orig_95pct_historical_VaR_pct, orig_95pct_CVaR_pct = compute_risk(r_target)
+    hedged_95pct_historical_VaR_pct, hedged_95pct_CVaR_pct = compute_risk(r_hedged_static)
+
+    # --- 5. Notes ---
+    notes = []
+    if rolling_median_vr_pct > 20: notes.append("generally effective")
+    elif rolling_median_vr_pct < 5: notes.append("weak hedge")
+    if rolling_std_vr_pct > 30: notes.append("highly time-varying")
+    notes = "; ".join(notes) or "stable effectiveness"
+
+    # --- 6. Compile Row ---
+    stats_data = {
+        'Hedge Direction': [direction_name],
+        'Static Beta': [static_beta],
+        'Static Var. Reduction %': [static_variance_reduction_pct],
+        'Rolling Mean VR %': [rolling_mean_vr_pct],
+        'Rolling Median VR %': [rolling_median_vr_pct],
+        'Original Ann. Volatility %': [orig_vol_pct_ann],
+        'Hedged Ann. Volatility %': [hedged_vol_pct_ann],
+        'Original 95% VaR %': [orig_95pct_historical_VaR_pct],
+        'Hedged 95% VaR %': [hedged_95pct_historical_VaR_pct],
+        'Notes': [notes]
+    }
+    
+    stats_df = pd.DataFrame(stats_data)
+    
+    # Ensure all float columns are rounded to 4 decimals for clean display
+    for col in stats_df.columns:
+        if stats_df[col].dtype in ['float64', 'float32']:
+            stats_df[col] = stats_df[col].round(4)
+
+    return stats_df
+
+# --- PLOTTING LOGIC (Single Plot) ---
+
+def plot_results(vr_series, target, hedge, returns_df, window=ROLLING_WINDOW_DAYS):
+    """Creates the single figure plot and saves it as a PNG."""
+    
+    # Note: Use 'seaborn-v0_8-whitegrid' for compatibility with various matplotlib versions
+    try:
+        plt.style.use('seaborn-v0_8-whitegrid') 
+    except:
+        plt.style.use('seaborn-whitegrid') # Fallback
+        
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    ax.plot(vr_series.index, vr_series, 
+            label=f"{target} hedged by {hedge} (rolling VR%)", 
+            color=COLOR_HEDGED, 
+            linestyle='-', 
+            linewidth=2)
+
+    ax.axhline(0, color=COLOR_ZERO, linestyle='-', linewidth=1.0, alpha=0.7)
+    ax.axhline(50, color='blue', linestyle=':', linewidth=1.0, alpha=0.7, label='50% Target')
+    
+    ax.set_ylim([-200, 100])
+    
+    # 4. Add Annotations for Worst Days (of the Target Asset)
+    r_target_col = f'r_{target}'
+    worst_days = returns_df[r_target_col].nsmallest(3).index 
+    y_pos = 90
+    
+    for day in worst_days:
+        # Check if the day is in the VR series index to ensure plot alignment
+        if day in vr_series.index:
+            ax.axvline(day, color='gray', linestyle=':', linewidth=1.0, alpha=0.5)
+            label_text = day.strftime('%Y-%m-%d')
+            ax.annotate(label_text, 
+                        xy=(day, y_pos), 
+                        xytext=(3, 0), 
+                        textcoords='offset points', 
+                        fontsize=7, 
+                        rotation=90,
+                        ha='left',
+                        va='top')
+            y_pos -= 5
+
+    # 5. Styling and Labels
+    ax.set_title(
+        f"Rolling Variance Reduction (%) — {target} Hedged by {hedge} (window = {window} days)",
+        fontsize=16, 
+        fontweight='bold', 
+        pad=10
+    )
+    ax.set_xlabel("Date", fontsize=12)
+    ax.set_ylabel("Variance Reduction (%)", fontsize=12)
+    ax.legend(loc='lower left', fontsize=10)
+    
+    # FIX: Explicitly set ticks and use them to set labels, resolving the UserWarning
+    vals = ax.get_yticks()
+    ax.set_yticks(vals)
+    ax.set_yticklabels(['{:,.0f}%'.format(x) for x in vals])
+    
+    plt.tight_layout()
+    plt.savefig(PLOT_FILENAME)
+    print(f"\n--- Plot saved as '{PLOT_FILENAME}' ---")
+
+
+# --- MAIN EXECUTION ---
+
+def main(start_date=DEFAULT_START_DATE, end_date=DEFAULT_END_DATE, window=ROLLING_WINDOW_DAYS):
+    """Main function to run the single-direction hedging analysis pipeline."""
+    
+    # 1. Get and prepare data, using the configured names and files
+    try:
+        returns_df = get_data(
+            TARGET_FILE, 
+            HEDGE_FILE, 
+            TARGET_ASSET_NAME, 
+            HEDGE_ASSET_NAME, 
+            start_date, 
+            end_date
+        )
+    except Exception as e:
+        print(f"FATAL ERROR during data acquisition: {e}")
+        return
+
+    # 2. Calculate Rolling Metrics for Plotting (Single Direction)
+    vr_series, _ = calculate_rolling_vr(
+        returns_df, 
+        TARGET_ASSET_NAME, 
+        HEDGE_ASSET_NAME, 
+        window
+    )
+
+    # 3. Generate Plot
+    plot_results(vr_series, TARGET_ASSET_NAME, HEDGE_ASSET_NAME, returns_df, window)
+
+    # 4. Calculate Summary Statistics Table
+    stats_df = calculate_static_and_rolling_stats(
+        returns_df, 
+        TARGET_ASSET_NAME, 
+        HEDGE_ASSET_NAME, 
+        window
+    )
+    
+    # 5. Save and Print Statistics Table
+    stats_df.to_csv(STATS_FILENAME, float_format='%.4f', index=False)
+    print(f"\n--- Summary Statistics Table saved as '{STATS_FILENAME}' ---\n")
+    print("--------------------------------------------------------------------------------------------------------------------------------")
+    print(f"RESULTS: {TARGET_ASSET_NAME} Hedged by {HEDGE_ASSET_NAME}")
+    print("--------------------------------------------------------------------------------------------------------------------------------")
+    # FIX: Removed the unsupported 'float_format' argument from to_string(). 
+    # Since the numbers are already rounded to 4 decimals, to_string() will now print them correctly.
+    print(stats_df.to_string(index=False))
+    print("--------------------------------------------------------------------------------------------------------------------------------")
+
+
+if __name__ == "__main__":
+    # Ensure the output variables are set before running main
+    PLOT_FILENAME = f"{TARGET_ASSET_NAME}_hedged_by_{HEDGE_ASSET_NAME}_VR_plot.png"
+    STATS_FILENAME = f"{TARGET_ASSET_NAME}_hedged_by_{HEDGE_ASSET_NAME}_stats_table.csv"
+    
+    main(start_date=DEFAULT_START_DATE, end_date=DEFAULT_END_DATE)
+
+
+
+     |    Results   |
+#Results are saved in a word doc with same title as this which also explains the results
