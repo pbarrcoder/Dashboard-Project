@@ -1,27 +1,32 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.animation as animation # NEW: Import for animation
+import matplotlib.animation as animation 
+from matplotlib.widgets import Button
 import os
 import numpy as np 
 from datetime import datetime
 from matplotlib.ticker import ScalarFormatter
-import math # Needed for np.ceil
+import math 
 
 # --- CONFIGURATION (Change these file paths as needed) ---
 # NOTE: Using absolute paths to prevent File Not Found errors.
+# IMPORTANT: Adjust this BASE_PATH to the actual location of your CSV files.
 BASE_PATH = "c:/Users/peter_bkbowcp/OneDrive/Desktop/Dashboard Project/" 
 
 GOLD_FILE = BASE_PATH + "Gold Futures Historical Data.csv"
 BTC_FILE = BASE_PATH + "Bitcoin Historical Data.csv"
 
-START_DATE = '2011-01-01' # Starting date for the analysis
-TRADING_DAYS_PER_YEAR = 252 # Used for annualizing returns/volatility
+START_DATE = '2011-01-01'
+TRADING_DAYS_PER_YEAR = 252
 
-# NEW: Animation Configuration
-STEP_SIZE = 20 # Number of trading days to reveal per frame (adjust for speed/smoothness)
+# Animation Configuration
+STEP_SIZE = 20 # Days revealed per frame (adjust for speed/smoothness)
 
 # List of common column headers for the closing price
 CLOSE_CANDIDATES = ["Close", "Adj Close", "Close*", "Price", "Last", "Close/Last"]
+
+# Global variable to hold the animation object (must be global to prevent garbage collection)
+ani = None
 
 # --- Helper function to clean quoted, comma-separated numbers ---
 def clean_numeric_series(s):
@@ -31,7 +36,7 @@ def clean_numeric_series(s):
             .str.replace("'", "", regex=False)
             .str.replace(",", "", regex=False)
             .str.strip()
-            .replace("", pd.NA) # Replace empty strings with NA
+            .replace("", pd.NA) 
             .astype(float)
            )
 
@@ -40,7 +45,6 @@ def load_and_clean(filename, asset_name):
     """Loads a CSV, cleans data, sets Date as index, and converts prices to float."""
     print(f"Loading {asset_name} data from: {filename}")
     if not os.path.exists(filename):
-        # Raise a more descriptive error based on the absolute path
         raise FileNotFoundError(
             f"ERROR: File not found: '{filename}'. "
             f"Please ensure the path and filename are correct."
@@ -68,15 +72,12 @@ def load_and_clean(filename, asset_name):
 
     df["Close"] = clean_numeric_series(df[close_col])
     
-    # Calculate daily returns for statistics later
     df['Daily_Return'] = df['Close'].pct_change()
     
-    # Set Date as index for time series calculations and filter by START_DATE
     df = df[["Date", "Close", "Daily_Return"]].dropna(subset=["Date", "Close"]).sort_values("Date")
     df = df.set_index("Date")
     df = df[df.index >= START_DATE]
     
-    # Calculate Cumulative Return Index (100 at start) - not used in this plot, but good for reference
     if not df.empty and df.iloc[0]['Close'] != 0:
         df[f'Index_{asset_name}'] = (df['Close'] / df['Close'].iloc[0]) * 100
     else:
@@ -84,71 +85,18 @@ def load_and_clean(filename, asset_name):
     
     return df.rename(columns={'Close': f'Close_{asset_name}', 'Daily_Return': f'Return_{asset_name}'})
 
-# --- Animation Setup ---
-
-def init_plot(ax1_gold, ax1_btc, combined):
-    """Initializes the plot elements and sets fixed limits for smooth animation."""
-    # Define colors
-    color_gold = '#E69F00' # Gold/Orange
-    color_btc = '#003366' # Dark Navy Blue
-
-    # Set up axes and plot empty lines
-    ax1_gold.set_ylabel("Prices in USD per oz (Gold)", fontsize=14, color=color_gold)
-    ax1_gold.tick_params(axis='y', labelcolor=color_gold)
-    ax1_btc.set_ylabel("Prices in USD per BTC (Bitcoin)", fontsize=14, color=color_btc)
-    ax1_btc.tick_params(axis='y', labelcolor=color_btc)
-
-    # Apply ScalarFormatter and Log Scale
-    formatter = ScalarFormatter()
-    formatter.set_scientific(False)
-    ax1_gold.yaxis.set_major_formatter(formatter)
-    ax1_btc.yaxis.set_major_formatter(formatter)
-    ax1_gold.set_yscale('log')
-    ax1_btc.set_yscale('log')
-
-    # Set fixed limits based on the full data range for smoother animation
-    ax1_gold.set_xlim(combined.index[0], combined.index[-1])
-    ax1_gold.set_ylim(combined['Close_Gold'].min() * 0.9, combined['Close_Gold'].max() * 1.1)
-    ax1_btc.set_ylim(combined['Close_BTC'].min() * 0.9, combined['Close_BTC'].max() * 1.1)
-
-    # Initialize empty lines for animation
-    line_gold, = ax1_gold.plot([], [], label="Gold Price (USD per oz)", color=color_gold, linewidth=2.5)
-    line_btc, = ax1_btc.plot([], [], label="Bitcoin Price (USD per BTC)", color=color_btc, linewidth=2.5)
-
-    ax1_gold.set_title(
-        f"Animated Price Growth of Gold and Bitcoin (Logarithmic Scale from {START_DATE})",
-        fontsize=16,
-        fontweight='bold',
-        pad=10
-    )
-    ax1_gold.set_xlabel("Time", fontsize=14)
-
-    # Combine and display legends
-    lines1, labels1 = ax1_gold.get_legend_handles_labels()
-    lines2, labels2 = ax1_btc.get_legend_handles_labels()
-    ax1_gold.legend(lines1 + lines2, labels1 + labels2, fontsize=10, loc='upper left')
-
-    # Return the line objects, which FuncAnimation will update
-    return line_gold, line_btc
-
-# This list will hold the line objects returned by init_plot
-lines = [] 
-# This variable will track the index of the last data point drawn
-current_data_index = 0
-
-def animate_frame(i, combined, line_gold, line_btc, ax1_gold):
-    """Updates the data displayed on the plot for each frame."""
-    global current_data_index
+# --- Animation/Update Function ---
+def animate_frame(i, combined, line_gold, line_btc, ax1_gold, button):
+    """
+    Updates the data displayed on the plot for each frame using the frame index 'i'.
+    This is the core fix to ensure consistent progression.
+    """
     
-    # Calculate the end index for the current frame
+    # Calculate the end index for the current frame: (frame_number + 1) * step_size
     end_index = min((i + 1) * STEP_SIZE, len(combined))
 
-    if end_index == current_data_index:
-        # If we haven't moved forward, no need to update
-        return line_gold, line_btc # Must return blitted artists
-
-    current_data_index = end_index
-    data_slice = combined.iloc[:current_data_index]
+    # Slice the data up to the current frame's end index
+    data_slice = combined.iloc[:end_index]
 
     if data_slice.empty:
         return line_gold, line_btc
@@ -166,69 +114,173 @@ def animate_frame(i, combined, line_gold, line_btc, ax1_gold):
         fontweight='bold',
         pad=10
     )
+    # Print current date to the console for tracking
+    print(f"Drawing up to: {current_date}", end='\r')
 
+    # Check if this is the final frame and update the button text
+    if end_index == len(combined):
+        button.label.set_text('Replay Animation')
+        # Ensure the button text updates immediately
+        button.ax.figure.canvas.draw_idle() 
+    
     # Return the artists (lines) that were modified
     return line_gold, line_btc
 
-
-# --- Main Execution Block ---
-if __name__ == "__main__":
+# --- Button Callback Function ---
+def start_animation_callback(event, combined, fig, ax1_gold, line_gold, line_btc, button):
+    """Initializes and starts the FuncAnimation when the button is clicked."""
+    global ani
     
-    # 1. Load and Clean Data
-    try:
-        gold_df = load_and_clean(GOLD_FILE, 'Gold')
-        btc_df  = load_and_clean(BTC_FILE, 'BTC')
+    # 1. Stop any previous animation
+    if ani:
+        ani.event_source.stop()
+    
+    # 2. Clear the lines to start from scratch (resets the plot to empty lines)
+    line_gold.set_data([], [])
+    line_btc.set_data([], [])
 
-    except Exception as e:
-        print(f"An error occurred during file loading: {e}")
-        exit()
+    # 3. Update button state and title
+    button.label.set_text('Animating...')
+    button.ax.figure.canvas.draw_idle() # Redraw button immediately
 
-    # 2. Merge data on common dates
-    combined = pd.merge(gold_df[[f'Close_Gold', 'Return_Gold']],
-                        btc_df[[f'Close_BTC', 'Return_BTC']],
-                        left_index=True, right_index=True, how="inner").dropna()
+    # Set title back to a neutral starting state
+    ax1_gold.set_title(
+        f"Animated Price Growth of Gold and Bitcoin (Starting...)",
+        fontsize=16,
+        fontweight='bold',
+        pad=10
+    )
 
-    if combined.empty:
-        print(f"ERROR: No common dates found across the required files after {START_DATE}.")
-        exit()
-
-    # 3. Plotting Setup
-    plt.style.use('default')
-    # Increased figure width slightly to better match aspect ratio
-    fig, ax1_gold = plt.subplots(1, 1, figsize=(18, 8)) 
-    ax1_btc = ax1_gold.twinx()
-
-    # Initialize plot elements and get line objects
-    line_gold, line_btc = init_plot(ax1_gold, ax1_btc, combined)
-
-    # Calculate number of frames needed
+    # 4. Calculate number of frames needed
     num_frames = math.ceil(len(combined) / STEP_SIZE)
-
-    # 4. Create and Show the Animation
-    # interval=50ms means a new frame every 50 milliseconds (~20 frames per second)
+    
+    # 5. Initialize and assign the animation object to the global variable
     ani = animation.FuncAnimation(
         fig,
         animate_frame,
-        fargs=(combined, line_gold, line_btc, ax1_gold),
-        frames=num_frames,
-        interval=50,
-        blit=True, # Optimized drawing for faster performance
+        fargs=(combined, line_gold, line_btc, ax1_gold, button),
+        frames=num_frames, # Use the calculated number of frames
+        interval=50, # 50 milliseconds between frames
+        blit=False, # IMPORTANT: Setting blit to False for reliable title/button updates
         repeat=False
     )
+    
+    # Ensure the plot redrawing is triggered
+    fig.canvas.draw_idle()
 
-    plt.tight_layout()
-    # Note: The animation window will open and block execution until you close it.
-    plt.show() 
 
-    # 5. Calculate and Print Statistics (This will execute after the animation window is closed)
+# --- Main Plotting Function ---
+def plot_gold_btc_dashboard():
+    
+    try:
+        # Load Gold and BTC files
+        gold_df = load_and_clean(GOLD_FILE, 'Gold')
+        btc_df  = load_and_clean(BTC_FILE, 'BTC')
+            
+    except Exception as e:
+        print(f"An error occurred during file loading: {e}")
+        return
+
+    # 1. Merge data
+    combined = pd.merge(gold_df[[f'Close_Gold', 'Return_Gold']], 
+                        btc_df[[f'Close_BTC', 'Return_BTC']], 
+                        left_index=True, right_index=True, how="inner").dropna()
+        
+    if combined.empty:
+        print(f"ERROR: No common dates found across the required files after {START_DATE}.")
+        return
+        
+    # 2. Calculate Statistics
     daily_returns = combined[['Return_Gold', 'Return_BTC']].dropna()
-
+    
     gold_mean = daily_returns["Return_Gold"].mean() * TRADING_DAYS_PER_YEAR * 100
     gold_std  = daily_returns["Return_Gold"].std() * np.sqrt(TRADING_DAYS_PER_YEAR) * 100
     btc_mean  = daily_returns["Return_BTC"].mean() * TRADING_DAYS_PER_YEAR * 100
     btc_std   = daily_returns["Return_BTC"].std() * np.sqrt(TRADING_DAYS_PER_YEAR) * 100
     correlation = daily_returns["Return_Gold"].corr(daily_returns["Return_BTC"])
+    
+    # --- Plotting Setup ---
+    plt.style.use('default')
+    
+    # Create the main axes for the plot
+    # The figure size is increased, and the plot area is shifted up to make space for the button
+    fig, ax1_gold = plt.subplots(1, 1, figsize=(18, 9)) 
+    
+    # Adjust subplot position to make room for the button
+    fig.subplots_adjust(bottom=0.1)
 
+    # Define colors
+    color_gold = '#E69F00' 
+    color_btc = '#003366' 
+
+    # --- Initial Static Plot (Shows the complete data) ---
+    
+    # Plot Gold Price (Orange, Left Axis)
+    line_gold, = ax1_gold.plot(
+        combined.index, 
+        combined['Close_Gold'], 
+        label="Gold Price (USD per oz)", 
+        color=color_gold, 
+        linewidth=2.5
+    )
+    ax1_gold.set_ylabel("Prices in USD per oz (Gold)", fontsize=14, color=color_gold)
+    ax1_gold.tick_params(axis='y', labelcolor=color_gold)
+    
+    formatter = ScalarFormatter()
+    formatter.set_scientific(False) 
+    ax1_gold.yaxis.set_major_formatter(formatter)
+    ax1_gold.set_yscale('log')
+    
+    # Create Twin Axis for Bitcoin
+    ax1_btc = ax1_gold.twinx() 
+    line_btc, = ax1_btc.plot(
+        combined.index, 
+        combined['Close_BTC'], 
+        label="Bitcoin Price (USD per BTC)", 
+        color=color_btc, 
+        linewidth=2.5
+    )
+    ax1_btc.set_ylabel("Prices in USD per BTC (Bitcoin)", fontsize=14, color=color_btc)
+    ax1_btc.tick_params(axis='y', labelcolor=color_btc)
+    
+    ax1_btc.yaxis.set_major_formatter(formatter)
+    ax1_btc.set_yscale('log')
+    
+    # Set fixed limits based on the full data range for smoother animation
+    ax1_gold.set_xlim(combined.index[0], combined.index[-1])
+    ax1_gold.set_ylim(combined['Close_Gold'].min() * 0.9, combined['Close_Gold'].max() * 1.1)
+    ax1_btc.set_ylim(combined['Close_BTC'].min() * 0.9, combined['Close_BTC'].max() * 1.1)
+
+    # Title and Legend
+    ax1_gold.set_title(
+        f"Raw Prices of Gold and Bitcoin (Logarithmic Scale from {START_DATE})", 
+        fontsize=16, 
+        fontweight='bold', 
+        pad=10
+    )
+    ax1_gold.set_xlabel("Time", fontsize=14)
+    
+    lines1, labels1 = ax1_gold.get_legend_handles_labels()
+    lines2, labels2 = ax1_btc.get_legend_handles_labels()
+    ax1_gold.legend(lines1 + lines2, labels1 + labels2, fontsize=10, loc='upper left') 
+
+    # --- Button Implementation ---
+    # Define the coordinates for the button: [left, bottom, width, height]
+    ax_button = fig.add_axes([0.45, 0.02, 0.15, 0.04]) 
+    
+    # Create the Button instance
+    button = Button(ax_button, 'Start Animation', color='#4CAF50', hovercolor='#66BB6A')
+    
+    # Connect the button click event to the callback function
+    # We pass all necessary objects to the callback
+    button.on_clicked(lambda event: start_animation_callback(
+        event, combined, fig, ax1_gold, line_gold, line_btc, button
+    ))
+
+    # --- Final Output ---
+    plt.show()
+    
+    # 3. Print Statistics to Console (prints after the window is closed)
     print("\n" + "="*50)
     print(f"--- Annualized Statistics ({START_DATE} to Present) ---")
     print("="*50)
@@ -239,3 +291,8 @@ if __name__ == "__main__":
     print("-" * 50)
     print(f"| Correlation (Gold vs BTC)   | {correlation:18.3f} |")
     print("="*50 + "\n")
+
+
+if __name__ == "__main__":
+    plot_gold_btc_dashboard()
+
