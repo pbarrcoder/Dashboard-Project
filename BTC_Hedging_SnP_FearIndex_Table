@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BTC Vs Gold Hedging Comparison, Market & Fear Index</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc; 
+        }
+        .modal {
+            transition: opacity 0.3s ease-in-out, visibility 0.3s ease-in-out;
+        }
+        /* Base styles for data cells (numbers) */
+        .data-cell {
+            cursor: pointer;
+            transition: background-color 0.15s ease;
+            font-size: 0.875rem;
+            color: #1f2937;
+            /* Data numbers are consistently bold */
+            font-weight: 700; 
+        }
+        .data-cell:hover {
+            background-color: #f3f4f6; /* Tailwind gray-100 hover */
+        }
+        /* Style for the clickable metric name in the first column (ALL BOLD now) */
+        .metric-cell {
+            cursor: pointer;
+            font-weight: 700; /* Ensure all metric names are bold */
+            transition: background-color 0.15s ease;
+            color: #1f2937;
+        }
+        .metric-cell:hover {
+            background-color: #f9f9fb; /* Very light gray hover on metric name */
+        }
+        /* Row background styles */
+        .bg-gray-50 {
+            background-color: #f9fafb; /* Lighter gray for alternating */
+        }
+        .bg-white {
+            background-color: #ffffff;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div class="max-w-4xl mx-auto">
+        <h1 class="text-3xl font-extrabold text-gray-900 mb-6 border-b-2 border-indigo-500 pb-3">
+            BTC Vs Gold Hedging Comparison, Market & Fear Index
+        </h1>
+        <p class="text-lg text-gray-600 mb-8">
+            Click on the statistics / words to find out more!
+        </p>
+
+        <div class="bg-white shadow-xl border border-gray-100 rounded-xl overflow-hidden mb-6">
+            <table class="min-w-full divide-y divide-gray-200">
+                
+                <!-- Header (Navy Blue - bg-indigo-700) -->
+                <thead class="bg-indigo-700 text-white">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-sm font-bold uppercase tracking-wider w-1/2">
+                            METRIC
+                        </th>
+                        <th class="px-4 py-3 text-center text-sm font-bold uppercase tracking-wider w-1/4">
+                            S&P 500 (Hedged by BTC)
+                        </th>
+                        <th class="px-4 py-3 text-center text-sm font-bold uppercase tracking-wider w-1/4">
+                            VIX Index (Hedged by BTC)
+                        </th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+
+                    <!-- Static Beta - Row 1 (bg-white) -->
+                    <tr class="bg-white">
+                        <td data-metric="info" data-asset="beta" class="metric-cell px-4 py-3 text-sm">Static Beta (Optimal Hedge Ratio)</td>
+                        <td data-metric="beta" data-asset="sp500" class="data-cell text-center px-4 py-3" data-value="0.072">0.072</td>
+                        <td data-metric="beta" data-asset="vix" class="data-cell text-center px-4 py-3" data-value="-0.352">-0.352</td>
+                    </tr>
+                    <!-- Static Var. Reduction % - Row 2 (bg-gray-50) -->
+                    <tr class="bg-gray-50">
+                        <td data-metric="info" data-asset="var_reduction" class="metric-cell px-4 py-3 text-sm">Static Var. Reduction %</td>
+                        <td data-metric="var_reduction" data-asset="sp500" class="data-cell text-center px-4 py-3" data-value="5.485">5.485</td>
+                        <td data-metric="var_reduction" data-asset="vix" class="data-cell text-center px-4 py-3" data-value="2.917">2.917</td>
+                    </tr>
+
+                    <!-- Original Volatility - Row 3 (bg-white) -->
+                    <tr class="bg-white">
+                        <td data-metric="info" data-asset="original_vol" class="metric-cell px-4 py-3 text-sm">Original Ann. Volatility %</td>
+                        <td data-metric="original_vol" data-asset="sp500" class="data-cell text-center px-4 py-3" data-value="18.299">18.299</td>
+                        <td data-metric="original_vol" data-asset="vix" class="data-cell text-center px-4 py-3" data-value="122.114">122.114</td>
+                    </tr>
+                    <!-- Hedged Volatility % - Row 4 (bg-gray-50) -->
+                    <tr class="bg-gray-50">
+                        <td data-metric="info" data-asset="hedged_vol" class="metric-cell px-4 py-3 text-sm">Hedged Ann. Volatility %</td>
+                        <td data-metric="hedged_vol" data-asset="sp500" class="data-cell text-center px-4 py-3" data-value="17.790">17.790</td>
+                        <td data-metric="hedged_vol" data-asset="vix" class="data-cell text-center px-4 py-3" data-value="120.320">120.320</td>
+                    </tr>
+                    
+                    <!-- Original VaR - Row 5 (bg-white) -->
+                    <tr class="bg-white">
+                        <td data-metric="info" data-asset="original_var" class="metric-cell px-4 py-3 text-sm">Original 95% VaR % (Daily)</td>
+                        <td data-metric="original_var" data-asset="sp500" class="data-cell text-center px-4 py-3">1.557</td>
+                        <td data-metric="original_var" data-asset="vix" class="data-cell text-center px-4 py-3">12.294</td>
+                    </tr>
+                    <!-- Hedged VaR - Row 6 (bg-gray-50) -->
+                    <tr class="bg-gray-50">
+                        <td data-metric="info" data-asset="hedged_var" class="metric-cell px-4 py-3 text-sm">Hedged 95% VaR % (Daily)</td>
+                        <td data-metric="hedged_var" data-asset="sp500" class="data-cell text-center px-4 py-3">1.519</td>
+                        <td data-metric="hedged_var" data-asset="vix" class="data-cell text-center px-4 py-3">12.144</td>
+                    </tr>
+
+                    <!-- Correlation Metrics - Row 7 (bg-white) -->
+                    <tr class="bg-white">
+                        <td data-metric="info" data-asset="corr_mean" class="metric-cell px-4 py-3 text-sm">Rolling Correlation (Mean)</td>
+                        <td data-metric="corr_mean" data-asset="sp500" class="data-cell text-center px-4 py-3">0.196</td>
+                        <td data-metric="corr_mean" data-asset="vix" class="data-cell text-center px-4 py-3">-0.195</td>
+                    </tr>
+                    <!-- Correlation Std Dev - Row 8 (bg-gray-50) -->
+                    <tr class="bg-gray-50">
+                        <td data-metric="info" data-asset="corr_std" class="metric-cell px-4 py-3 text-sm">Rolling Correlation (Std Dev)</td>
+                        <td data-metric="corr_std" data-asset="sp500" class="data-cell text-center px-4 py-3">0.207</td>
+                        <td data-metric="corr_std" data-asset="vix" class="data-cell text-center px-4 py-3">0.191</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        
+        <div class="p-5 bg-white border-t-4 border-indigo-700 shadow-xl rounded-xl hover:shadow-2xl transition duration-300 cursor-pointer" onclick="openComparisonModal()">
+            <h2 class="text-xl font-bold text-gray-900 mb-1 flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-indigo-700 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.669A9.76 9.76 0 0112 2c4.97 0 9 3.582 9 8z" />
+                </svg>
+                Key Insight: Compare S&P 500 vs. VIX Hedging
+            </h2>
+            <p class="text-sm text-gray-600">
+                Click to understand the significance of the **positive S&P 500 hedge ratio** vs. the **negative VIX hedge ratio**.
+            </p>
+        </div>
+
+
+    </div>
+
+    
+    <div id="explanation-modal" class="modal fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 invisible opacity-0">
+        <div class="bg-white rounded-xl shadow-2xl p-6 m-4 max-w-lg w-full transform transition-all scale-95" onclick="event.stopPropagation()">
+            
+            <h3 id="modal-title" class="text-xl font-bold text-gray-800 mb-3 border-b pb-2"></h3>
+            
+            <p id="modal-metric-name" class="text-sm text-indigo-700 mb-4 font-semibold"></p>
+            
+            <div class="mb-4">
+                
+                <p id="modal-description" class="text-gray-700 text-sm"></p>
+            </div>
+            
+            <div class="mb-4">
+                
+                <p id="modal-context" class="text-gray-700 text-sm"></p>
+            </div>
+            
+            
+            <button onclick="closeModal()" class="mt-4 w-full bg-indigo-700 hover:bg-indigo-800 text-white font-medium py-2 rounded-lg transition duration-150">
+                Got it
+            </button>
+        </div>
+    </div>
+
+    
+    <div id="comparison-modal" class="modal fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 invisible opacity-0">
+        <div class="bg-white rounded-xl shadow-2xl p-6 m-4 max-w-xl w-full transform transition-all scale-95" onclick="event.stopPropagation()">
+            <h3 class="text-xl font-bold text-gray-800 mb-3 border-b pb-2">
+                S&P 500 vs. VIX Hedging: The Direction of Risk
+            </h3>
+            
+            <div class="space-y-4 text-sm text-gray-700">
+                <p>The key difference is the sign of the Optimal Hedge Ratio (Static Beta), which reveals the nature of the relationship between the primary asset and Bitcoin (BTC).</p>
+                
+                <div class="p-3 border-l-4 border-green-500 bg-green-50 rounded-md">
+                    <p class="font-semibold text-green-700">S&P 500 Hedge: Positive Beta (0.072)</p>
+                    <ul class="list-disc ml-5 mt-1 space-y-1">
+                        <li>S&P 500 and BTC are positively correlated (they generally move in the same direction).</li>
+                        <li>To reduce risk, you must take an opposite position in the hedge asset, meaning you need to **short Bitcoin**.</li>
+                        <li>BTC acts as an imperfect substitute for the S&P 500, requiring a short to offset its movements.</li>
+                    </ul>
+                </div>
+
+                <div class="p-3 border-l-4 border-red-500 bg-red-50 rounded-md">
+                    <p class="font-semibold text-red-700">VIX Hedge: Negative Beta (-0.352)</p>
+                    <ul class="list-disc ml-5 mt-1 space-y-1">
+                        <li>VIX (Fear Index) and BTC are negatively correlated (they generally move in opposite directions).</li>
+                        <li>VIX is a massive short-volatility asset. To hedge a short with a short (BTC), you end up taking the same position. Therefore, you need to **buy (go long) Bitcoin**.</li>
+                        <li>BTC acts as a directional counter-risk for the VIX. The size of the hedge (-0.352) reflects the VIX's extreme volatility.</li>
+                    </ul>
+                </div>
+
+                <p class="pt-2 italic">
+                    In summary: Hedging the S&P 500 requires a short BTC position. Hedging the VIX (a proxy for market fear) requires a long BTC position.
+                </p>
+            </div>
+            
+            
+            <button onclick="closeComparisonModal()" class="mt-4 w-full bg-indigo-700 hover:bg-indigo-800 text-white font-medium py-2 rounded-lg transition duration-150">
+                Close Comparison
+            </button>
+        </div>
+    </div>
+
+
+    <script>
+        // Data mapping for all explanations
+        const explanations = {
+            'info_beta': {
+                type: 'info',
+                abbreviated: 'Static Beta (Optimal Hedge Ratio)',
+                full: 'Optimal Hedging Ratio (Beta)',
+                definition: 'The precise amount of the hedging asset (Bitcoin) you need to buy or sell to achieve the maximum possible reduction in your main asset\'s risk.',
+                context: 'A positive figure means the assets move together (requires shorting the hedge). A negative figure means they move opposite (requires longing the hedge).'
+            },
+            'info_var_reduction': {
+                type: 'info',
+                abbreviated: 'Static Var. Reduction %',
+                full: 'Static Variance Reduction Percentage',
+                definition: 'The total percentage of risk (measured by variance) that is eliminated from your portfolio by applying the calculated hedge ratio.',
+                context: 'A higher percentage is better, indicating the hedge significantly reduced the overall volatility (risk) of your investment.'
+            },
+            'info_original_vol': {
+                type: 'info',
+                abbreviated: 'Original Ann. Volatility %',
+                full: 'Original Annualized Volatility Percentage',
+                definition: 'The baseline amount of price fluctuation (risk) expected in the primary asset over the course of a year, before any hedging is applied.',
+                context: 'This is the starting point of risk; it shows how volatile the asset naturally is.'
+            },
+            'info_hedged_vol': {
+                type: 'info',
+                abbreviated: 'Hedged Ann. Volatility %',
+                full: 'Hedged Annualized Volatility Percentage',
+                definition: 'The remaining price fluctuation (risk) expected in the portfolio over a year after the hedge has been successfully put into place.',
+                context: 'This number should ideally be lower than the Original Volatility to confirm a successful hedge.'
+            },
+            'info_original_var': {
+                type: 'info',
+                abbreviated: 'Original 95% VaR % (Daily)',
+                full: 'Original 95% Value-at-Risk Percentage (Daily)',
+                definition: 'The maximum percentage loss you are 95% confident you will not exceed on any given day, calculated before hedging.',
+                context: 'This estimates the worst-case single-day loss you are likely to face without protection.'
+            },
+            'info_hedged_var': {
+                type: 'info',
+                abbreviated: 'Hedged 95% VaR % (Daily)',
+                full: 'Hedged 95% Value-at-Risk Percentage (Daily)',
+                definition: 'The maximum percentage loss you are 95% confident you will not exceed on any given day, showing the reduction in potential worst-case loss after hedging.',
+                context: 'This should be lower than the Original VaR, indicating the hedge helps limit catastrophic losses.'
+            },
+            'info_corr_mean': {
+                type: 'info',
+                abbreviated: 'Rolling Correlation (Mean)',
+                full: 'Rolling Correlation (Average)',
+                definition: 'The average strength and direction of the relationship between the primary asset and the hedge asset over the entire time period analyzed.',
+                context: 'A figure close to 1 means they move perfectly together. Close to 0 means no relation. Close to -1 means they move perfectly opposite.'
+            },
+            'info_corr_std': {
+                type: 'info',
+                abbreviated: 'Rolling Correlation (Std Dev)',
+                full: 'Rolling Correlation (Standard Deviation)',
+                definition: 'A measure of how consistently the relationship (correlation) holds up. A high value means the relationship is unstable and often changes direction.',
+                context: 'A high Standard Deviation (Std Dev) suggests the correlation is volatile and unreliable for a long-term hedge.'
+            },
+
+            // --- Data Click Explanations (Type: data) ---
+            'beta_sp500': {
+                type: 'data',
+                title: 'Static Beta (Optimal Hedge Ratio)',
+                name: '0.072',
+                description: "This is the Ideal Weight of Bitcoin needed to short or buy to reduce the most risk from your primary investment. A positive number means the assets move together.",
+                context: "The figure **0.072** means that for every $1,000 you invest in the S&P 500, you need to short (bet against) $72.00 of Bitcoin to achieve the best risk reduction."
+            },
+            'beta_vix': {
+                type: 'data',
+                title: 'Static Beta (Optimal Hedge Ratio)',
+                name: '-0.352',
+                description: "This is the Ideal Weight of Bitcoin needed to short or buy to reduce the most risk from your primary investment. A negative number means the assets move in opposite directions.",
+                context: "The figure **-0.352** means that for every $1,000 you invest in the VIX, you need to buy (bet for) $352.00 of Bitcoin. The high amount reflects the VIX's extreme risk."
+            },
+            'var_reduction_sp500': {
+                type: 'data',
+                title: 'Static Variance Reduction %',
+                name: '5.485%',
+                description: "This measures the total percentage of risk (variance) that was successfully removed from your portfolio by applying the calculated hedge.",
+                context: "The figure **5.485%** confirms the hedge was successful, removing a solid amount of risk. The hedge with Bitcoin noticeably calms the total price swings of your S&P 500 exposure."
+            },
+            'var_reduction_vix': {
+                type: 'data',
+                title: 'Static Variance Reduction %',
+                name: '2.917%',
+                description: "This measures the total percentage of risk (variance) that was successfully removed from your portfolio by applying the calculated hedge.",
+                context: "The figure **2.917%** shows the hedge was less effective compared to the S&P 500. Bitcoin helps, but it only offers a minor buffer against the VIX's huge, sudden volatility."
+            },
+            'original_vol_sp500': {
+                type: 'data',
+                title: 'Original Ann. Volatility %',
+                name: '18.299%',
+                description: "This metric measures the average expected size of the S&P 500's daily price changes over a year. It represents the starting risk level of your investment.",
+                context: "This figure is the baseline risk of your portfolio before applying the Bitcoin hedge. This number needs to be compared against the 'Hedged' Volatility."
+            },
+            'hedged_vol_sp500': {
+                type: 'data',
+                title: 'Hedged Ann. Volatility %',
+                name: '17.790%',
+                description: "This metric measures the average expected size of the portfolio's daily price changes after the hedge is applied. A lower number means less risk.",
+                context: "The reduction from **18.299%** to **17.790%** confirms the hedge made your S&P 500 investment slightly calmer and more predictable, achieving a clear reduction in total price uncertainty."
+            },
+            'original_vol_vix': {
+                type: 'data',
+                title: 'Original Ann. Volatility %',
+                name: '122.114%',
+                description: "This metric measures the average expected size of the VIX's daily price changes over a year. It shows how unstable and high-risk the asset is.",
+                context: "This figure highlights the extreme baseline risk of the VIX. The price movements are huge, making VIX a notoriously high-volatility, hard-to-manage asset."
+            },
+            'hedged_vol_vix': {
+                type: 'data',
+                title: 'Hedged Ann. Volatility %',
+                name: '120.320%',
+                description: "This metric measures the average expected size of the portfolio's daily price changes after the hedge is applied. A lower number means less risk.",
+                context: "The volatility remains extremely high. The small drop from **122.114%** to **120.320%** confirms that the hedge provided only a marginal level of stability for this highly volatile asset."
+            },
+            'original_var_sp500': {
+                type: 'data',
+                title: 'Original 95% VaR % (Daily)',
+                name: '1.557%',
+                description: "Value-at-Risk (VaR) estimates your worst-case loss. This means you are 95% confident that on any given day, your loss will not be worse than this percentage.",
+                context: "This figure represents the unhedged 'bad day' risk. You can expect a loss worse than **1.557%** about 1 out of every 20 trading days."
+            },
+            'hedged_var_sp500': {
+                type: 'data',
+                title: 'Hedged 95% VaR % (Daily)',
+                name: '1.519%',
+                description: "Value-at-Risk (VaR) estimates your worst-case loss. This means you are 95% confident that after the hedge, your loss will not be worse than this percentage.",
+                context: "The figure confirms the hedge worked. Your worst-case daily loss has been reduced from **1.557%** to **1.519%**, making your unexpected 'bad days' less severe."
+            },
+            'original_var_vix': {
+                type: 'data',
+                title: 'Original 95% VaR % (Daily)',
+                name: '12.294%',
+                description: "Value-at-Risk (VaR) estimates your worst-case loss. This means you are 95% confident that on any given day, your loss will not be worse than this percentage.",
+                context: "This figure shows the potential for massive losses in the VIX. You can expect a loss worse than **12.294%** about 1 out of every 20 trading days."
+            },
+            'hedged_var_vix': {
+                type: 'data',
+                title: 'Hedged 95% VaR % (Daily)',
+                name: '12.144%',
+                description: "Value-at-Risk (VaR) estimates your worst-case loss. This means you are 95% confident that after the hedge, your loss will not be worse than this percentage.",
+                context: "The hedge slightly reduced the potential for catastrophic daily loss (from **12.294%** to **12.144%**), providing a small but necessary protective buffer against extreme movements."
+            },
+            'corr_mean_sp500': {
+                type: 'data',
+                title: 'Rolling Correlation (Mean)',
+                name: '0.196',
+                description: "This is the average strength and direction of the relationship between the S&P 500 and Bitcoin over the entire analysis period.",
+                context: "The figure is positive (**0.196**) but weak (closer to 0). This confirms that S&P 500 and Bitcoin mostly move together, but not strongly, which is why a short position is needed for hedging."
+            },
+            'corr_mean_vix': {
+                type: 'data',
+                title: 'Rolling Correlation (Mean)',
+                name: '-0.195',
+                description: "This is the average strength and direction of the relationship between the VIX (market fear) and Bitcoin over the entire analysis period.",
+                context: "The figure is negative (**-0.195**), which confirms the inverse relationship: when market fear (VIX) goes up, Bitcoin tends to go down. This is the basis for the long hedge."
+            },
+            'corr_std_sp500': {
+                type: 'data',
+                title: 'Rolling Correlation (Std Dev)',
+                name: '0.207',
+                description: "This measures the inconsistency of the relationship. A high number means the correlation often switches and is unreliable.",
+                context: "The figure **0.207** is high, meaning the relationship between S&P 500 and Bitcoin is unstable. You cannot rely on this hedge to work consistently every single day."
+            },
+            'corr_std_vix': {
+                type: 'data',
+                title: 'Rolling Correlation (Std Dev)',
+                name: '0.191',
+                description: "This measures the inconsistency of the relationship. A high number means the correlation often switches and is unreliable.",
+                context: "The figure **0.191** is also high, meaning the inverse relationship with the VIX is unstable. This explains why the risk reduction for the VIX was lower."
+            }
+        };
+
+        // --- Utility Functions for Modals and Comparison ---
+
+        const modal = document.getElementById('explanation-modal');
+        const comparisonModal = document.getElementById('comparison-modal');
+        const modalTitle = document.getElementById('modal-title');
+        const modalMetricName = document.getElementById('modal-metric-name');
+        const modalDescription = document.getElementById('modal-description');
+        const modalContext = document.getElementById('modal-context');
+
+        function openModal(metric, asset) {
+            const key = `${metric}_${asset}`;
+            const data = explanations[key];
+
+            if (data) {
+                if (data.type === 'info') {
+                    modalTitle.textContent = data.full; 
+                    modalMetricName.textContent = data.abbreviated; 
+                    modalDescription.innerHTML = `<p class="font-bold text-gray-800 mb-1">Definition:</p> ${data.definition}`;
+                    modalContext.innerHTML = `<p class="font-bold text-gray-800 mb-1 mt-2">Significance:</p> ${data.context}`;
+                } else {
+                    modalTitle.textContent = data.title;
+                    modalMetricName.textContent = data.name;
+                    modalDescription.innerHTML = `<p class="font-bold text-gray-800 mb-1">What it Means:</p> ${data.description}`;
+                    modalContext.innerHTML = `<p class="font-bold text-gray-800 mb-1 mt-2">Action/Significance:</p> ${data.context}`;
+                }
+                modal.classList.remove('invisible', 'opacity-0');
+                modal.classList.add('visible', 'opacity-100');
+            } else {
+                console.error('Explanation data not found for key:', key);
+            }
+        }
+
+        function closeModal() {
+            modal.classList.remove('visible', 'opacity-100');
+            modal.classList.add('invisible', 'opacity-0');
+        }
+
+        function openComparisonModal() {
+            comparisonModal.classList.remove('invisible', 'opacity-0');
+            comparisonModal.classList.add('visible', 'opacity-100');
+        }
+        
+        function closeComparisonModal() {
+            comparisonModal.classList.remove('visible', 'opacity-100');
+            comparisonModal.classList.add('invisible', 'opacity-0');
+        }
+        
+
+        // --- Initialization on Load ---
+        document.addEventListener('DOMContentLoaded', () => {
+            // 1. Add click listeners to cells
+            const cells = document.querySelectorAll('.data-cell, .metric-cell');
+            cells.forEach(cell => {
+                cell.addEventListener('click', () => {
+                    const metric = cell.getAttribute('data-metric');
+                    const asset = cell.getAttribute('data-asset');
+                    openModal(metric, asset);
+                });
+            });
+
+            // 2. Close modals when clicking outside
+            modal.addEventListener('click', closeModal);
+            comparisonModal.addEventListener('click', closeComparisonModal);
+        });
+    </script>
+</body>
+</html>
