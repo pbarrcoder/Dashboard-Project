@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Gold Hedging Comparison, Market & Fear Index</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        /* Custom styles to enhance presentation and interaction */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc; 
+        }
+        /* Modal transitions for smooth appearance */
+        .modal {
+            transition: opacity 0.3s ease-in-out, visibility 0.3s ease-in-out;
+        }
+        /* Styling for clickable data cells */
+        .data-cell {
+            cursor: pointer;
+            transition: background-color 0.15s ease;
+            font-size: 0.875rem;
+            color: #1f2937;
+            font-weight: 700; 
+        }
+        .data-cell:hover {
+            background-color: #eef2ff; /* Light indigo hover for data */
+        }
+        /* Styling for clickable metric name cells */
+        .metric-cell {
+            cursor: pointer;
+            font-weight: 700;
+            transition: background-color 0.15s ease;
+            color: #1f2937;
+        }
+        .metric-cell:hover {
+            background-color: #f3f4f6; /* Light gray hover for metrics */
+        }
+        .bg-gray-50 {
+            background-color: #f9fafb;
+        }
+        .bg-white {
+            background-color: #ffffff;
+        }
+        /* Scale and fade effect for modals */
+        .transform-modal {
+            transition: transform 0.3s ease-out, opacity 0.3s ease-out;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div class="max-w-4xl mx-auto">
+        <h1 class="text-3xl font-extrabold text-gray-900 mb-6 border-b-2 border-indigo-500 pb-3">
+            Gold Hedging Comparison, Market (S&P 500) & Uncertainty (VIX)
+        </h1>
+        <p class="text-lg text-gray-600 mb-8">
+            Click on the boxes in the table to view detailed financial explanations. (Data reflects Gold as the hedging asset)
+        </p>
+
+        <!-- Main Data Table -->
+        <div class="bg-white shadow-xl border border-gray-100 rounded-xl overflow-hidden mb-6">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-indigo-700 text-white">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-sm font-bold uppercase tracking-wider w-1/2">
+                            METRIC
+                        </th>
+                        <th class="px-4 py-3 text-center text-sm font-bold uppercase tracking-wider w-1/4">
+                            S&P 500 (Market)
+                        </th>
+                        <th class="px-4 py-3 text-center text-sm font-bold uppercase tracking-wider w-1/4">
+                            VIX Index (Uncertainty Index)
+                        </th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+
+                    <!-- Optimal Hedge Ratio (β) -->
+                    <tr class="bg-white">
+                        <td data-metric="info" data-asset="beta" class="metric-cell px-4 py-3 text-sm">Optimal Hedge Ratio (Beta)</td>
+                        <td data-metric="beta" data-asset="sp500" class="data-cell text-center px-4 py-3" data-value="0.049">0.049</td>
+                        <td data-metric="beta" data-asset="vix" class="data-cell text-center px-4 py-3" data-value="0.242">0.242</td>
+                    </tr>
+
+                    <!-- Hedge Effectiveness (%) -->
+                    <tr class="bg-gray-50">
+                        <td data-metric="info" data-asset="var_reduction" class="metric-cell px-4 py-3 text-sm">Hedge Effectiveness (%)</td>
+                        <td data-metric="var_reduction" data-asset="sp500" class="data-cell text-center px-4 py-3" data-value="0.164">0.164</td>
+                        <td data-metric="var_reduction" data-asset="vix" class="data-cell text-center px-4 py-3" data-value="0.091">0.091</td>
+                    </tr>
+
+                    <!-- Unhedged Annualized Volatility (%) -->
+                    <tr class="bg-white">
+                        <td data-metric="info" data-asset="original_vol" class="metric-cell px-4 py-3 text-sm">Unhedged Volatility (%)</td>
+                        <td data-metric="original_vol" data-asset="sp500" class="data-cell text-center px-4 py-3" data-value="18.318">18.318</td>
+                        <td data-metric="original_vol" data-asset="vix" class="data-cell text-center px-4 py-3" data-value="122.248">122.248</td>
+                    </tr>
+
+                    <!-- Hedged Annualized Volatility (%) -->
+                    <tr class="bg-gray-50">
+                        <td data-metric="info" data-asset="hedged_vol" class="metric-cell px-4 py-3 text-sm">Hedged Volatility (%)</td>
+                        <td data-metric="hedged_vol" data-asset="sp500" class="data-cell text-center px-4 py-3" data-value="18.303">18.303</td>
+                        <td data-metric="hedged_vol" data-asset="vix" class="data-cell text-center px-4 py-3" data-value="122.193">122.193</td>
+                    </tr>
+                    
+                    <!-- Unhedged 95% Value-at-Risk (%) -->
+                    <tr class="bg-white">
+                        <td data-metric="info" data-asset="original_var" class="metric-cell px-4 py-3 text-sm">Unhedged 95% Value-at-Risk (%)</td>
+                        <td data-metric="original_var" data-asset="sp500" class="data-cell text-center px-4 py-3" data-value="1.554">1.554</td>
+                        <td data-metric="original_var" data-asset="vix" class="data-cell text-center px-4 py-3" data-value="12.301">12.301</td>
+                    </tr>
+
+                    <!-- Hedged95% Value-at-Risk (%) -->
+                    <tr class="bg-gray-50">
+                        <td data-metric="info" data-asset="hedged_var" class="metric-cell px-4 py-3 text-sm">Hedged 95% Value-at-Risk (%)</td>
+                        <td data-metric="hedged_var" data-asset="sp500" class="data-cell text-center px-4 py-3" data-value="1.559">1.559</td>
+                        <td data-metric="hedged_var" data-asset="vix" class="data-cell text-center px-4 py-3" data-value="12.391">12.391</td>
+                    </tr>
+
+                    <!-- 90-Day Rolling Correlation (Mean) -->
+                    <tr class="bg-white">
+                        <td data-metric="info" data-asset="corr_mean" class="metric-cell px-4 py-3 text-sm">90-Day Rolling Correlation (Mean)</td>
+                        <td data-metric="corr_mean" data-asset="sp500" class="data-cell text-center px-4 py-3" data-value="-0.024">-0.024</td>
+                        <td data-metric="corr_mean" data-asset="vix" class="data-cell text-center px-4 py-3" data-value="0.032">0.032</td>
+                    </tr>
+
+                    <!-- 90-Day Rolling Correlation (Median) - NEW ROW -->
+                    <tr class="bg-gray-50">
+                        <td data-metric="info" data-asset="corr_median" class="metric-cell px-4 py-3 text-sm">90-Day Rolling Correlation (Median)</td>
+                        <td data-metric="corr_median" data-asset="sp500" class="data-cell text-center px-4 py-3" data-value="-0.017">-0.017</td>
+                        <td data-metric="corr_median" data-asset="vix" class="data-cell text-center px-4 py-3" data-value="0.011">0.011</td>
+                    </tr>
+
+                    <!-- 90-Day Rolling Correlation (Volatility) -->
+                    <tr class="bg-white">
+                        <td data-metric="info" data-asset="corr_std" class="metric-cell px-4 py-3 text-sm">90-Day Rolling Correlation (Volatility)</td>
+                        <td data-metric="corr_std" data-asset="sp500" class="data-cell text-center px-4 py-3" data-value="0.226">0.226</td>
+                        <td data-metric="corr_std" data-asset="vix" class="data-cell text-center px-4 py-3" data-value="0.190">0.190</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        
+        <!-- Key Insight Comparison Card (Clickable) -->
+        <div class="p-5 bg-white border-t-4 border-indigo-700 shadow-xl rounded-xl hover:shadow-2xl transition duration-300 cursor-pointer" onclick="openComparisonModal()">
+            <h2 class="text-xl font-bold text-gray-900 mb-1 flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-indigo-700 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.669A9.76 9.76 0 0112 2c4.97 0 9 3.582 9 8z" />
+                </svg>
+                Key Insight: Gold as a Hedging Asset?
+            </h2>
+            <p class="text-sm text-gray-600">
+                Click to understand Gold allocation in a well-diversified portfolio
+            </p>
+        </div>
+
+
+    </div>
+
+    <!-- Explanation Modal (For Metric Names and Data Values) -->
+    <div id="explanation-modal" class="modal fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 invisible opacity-0" aria-modal="true" role="dialog">
+        <div class="bg-white rounded-xl shadow-2xl p-6 m-4 max-w-lg w-full transform transition-all scale-95 transform-modal" onclick="event.stopPropagation()">
+            
+            <h3 id="modal-title" class="text-xl font-bold text-gray-800 mb-3 border-b pb-2"></h3>
+            
+            <p id="modal-metric-name" class="text-sm text-indigo-700 mb-4 font-semibold"></p>
+            
+            <div class="mb-4">
+                
+                <p id="modal-description" class="text-gray-700 text-sm"></p>
+            </div>
+            
+            <div class="mb-4">
+                
+                <p id="modal-context" class="text-gray-700 text-sm border-t pt-4 mt-4"></p>
+            </div>
+            
+            
+            <button onclick="closeModal()" class="mt-4 w-full bg-indigo-700 hover:bg-indigo-800 text-white font-medium py-2 rounded-lg transition duration-150">
+                Got it
+            </button>
+        </div>
+    </div>
+
+    
+    <!-- Comparison Modal (For Key Insight Card) -->
+    <div id="comparison-modal" class="modal fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50 invisible opacity-0" aria-modal="true" role="dialog">
+        <div class="bg-white rounded-xl shadow-2xl p-6 m-4 max-w-xl w-full transform transition-all scale-95 transform-modal" onclick="event.stopPropagation()">
+            <h3 class="text-xl font-bold text-gray-800 mb-3 border-b pb-2">
+                S&P 500 vs. VIX Hedging: The Direction of Risk
+            </h3>
+            
+            <div class="space-y-4 text-sm text-gray-700">
+                
+                <div class="p-3 border-l-4 border-green-500 bg-green-50 rounded-md">
+                    <p class="font-semibold text-green-700">S&P 500 Hedge: Positive Beta (0.049)</p>
+                    <ul class="list-disc ml-5 mt-1 space-y-1">
+                        <li>S&P 500 and Gold have a very small positive correlation.</li>
+                        <li>To reduce risk, you should short Gold by a small amount.</li>
+                        <li>The extremely low beta (0.049) confirms Gold's traditional role as an imperfect safe-haven asset with little correlation to stocks.</li>
+                    </ul>
+                </div>
+
+                <div class="p-3 border-l-4 border-green-500 bg-green-50 rounded-md">
+                    <p class="font-semibold text-green-700">VIX Hedge: Positive Beta (0.242)</p>
+                    <ul class="list-disc ml-5 mt-1 space-y-1">
+                        <li>VIX (Fear Index) and Gold show a moderate positive correlation, suggesting that both often increase during times of heightened uncertainty.</li>
+                        <li>To hedge VIX, you should short Gold.</li>
+                        <li>The higher hedge ratio (0.242) suggests that Gold is a more effective hedge for VIX volatility than it is for S&P 500 returns.</li>
+                    </ul>
+                </div>
+
+                <p class="pt-2 italic">
+                </p>
+
+                <!-- Executive Summary -->
+                <div class="mt-4 p-4 border-t pt-4">
+                    <h4 class="text-sm font-bold text-gray-800 mb-1">Executive Summary</h4>
+                    <p class="text-sm text-gray-700">
+                        Gold allocation of 5% - 10% is recommended in a diversified portfolio.
+                    </p>
+                </div>
+            </div>
+            
+            
+            <button onclick="closeComparisonModal()" class="mt-4 w-full bg-indigo-700 hover:bg-indigo-800 text-white font-medium py-2 rounded-lg transition duration-150">
+                Close Comparison
+            </button>
+        </div>
+    </div>
+
+
+    <script>
+        // Data mapping for all explanations (titles updated to the new finance-standard names)
+        const explanations = {
+            // --- Metric Name Info (Type: info) ---
+            'info_beta': {
+                type: 'info',
+                abbreviated: 'Optimal Hedge Ratio (Beta)',
+                full: 'Optimal Hedge Ratio (Beta)',
+                definition: 'The amount of the hedging asset (Gold) you need to buy or sell to minimise portfolio risk.',
+                context: 'A positive figure means the assets move together (sell the hedge). A negative figure means they move opposite (buy the hedge).'
+            },
+            'info_var_reduction': {
+                type: 'info',
+                abbreviated: 'Hedge Effectiveness (%)',
+                full: 'Hedge Effectiveness (%)',
+                definition: 'The total percentage of risk (variance) that is eliminated from your portfolio by applying the calculated hedge ratio.',
+                context: 'A higher percentage is better, indicating the hedge significantly reduces the overall volatility (risk) of your portfolio.'
+            },
+            'info_original_vol': {
+                type: 'info',
+                abbreviated: 'Unhedged Volatility (%)',
+                full: 'Unhedged Volatility (%)',
+                definition: 'The volatility of an unhedged portfolio.',
+                context: 'Natural Volatility of the Asset / Portfolio before any hedging tools are applied.'
+            },
+            'info_hedged_vol': {
+                type: 'info',
+                abbreviated: 'Hedged Volatility (%)',
+                full: 'Hedged Volatility (%)',
+                definition: 'The volatility of a hedged portfolio',
+                context: 'Volatility should be lower than unhedged volatility'
+            },
+            'info_original_var': {
+                type: 'info',
+                abbreviated: 'Unhedged 95% Value-at-Risk (%)',
+                full: 'Unhedged 95% Value-at-Risk (%)',
+                definition: 'The maximum percentage loss you are 95% confident you will not exceed on any given day, calculated before hedging.',
+                context: 'This estimates the worst-case single-day loss you are likely to face without hedging.'
+            },
+            'info_hedged_var': {
+                type: 'info',
+                abbreviated: 'Hedged 95% Value-at-Risk (%)',
+                full: 'Hedged 95% Value-at-Risk (%)',
+                definition: 'The maximum percentage loss you are 95% confident you will not exceed on any given day after applying the hedge.',
+                context: 'This should be lower than the Unhedged VaR if the hedge reduces worst-day tail risk.'
+            },
+            'info_corr_mean': {
+                type: 'info',
+                abbreviated: '90-Day Rolling Correlation (Mean)',
+                full: '90-Day Rolling Correlation (Mean)',
+                definition: 'The average strength and direction of the relationship between the primary asset and the hedge asset over the rolling 90-day windows.',
+                context: 'A figure close to 1 means they move perfectly together. Close to 0 means no relation. Close to -1 means they move perfectly opposite.'
+            },
+            'info_corr_median': {
+                type: 'info',
+                abbreviated: '90-Day Rolling Correlation (Median)',
+                full: '90-Day Rolling Correlation (Median)',
+                definition: 'The middle value of the 90-day rolling correlation distribution, providing a robust measure of the typical relationship between the two assets.',
+                context: 'If the mean and median are close, the distribution is symmetric. A large difference indicates skewness or outliers in the correlation data.'
+            },
+            'info_corr_std': {
+                type: 'info',
+                abbreviated: '90-Day Rolling Correlation (Volatility)',
+                full: '90-Day Rolling Correlation (Volatility)',
+                definition: 'A measure of how consistently the rolling correlation holds up. A higher value means the rolling correlation is more variable (less stable).',
+                context: 'A high number suggests the correlation is unstable and may not be reliable for long-term hedging.'
+            },
+
+            // --- Data Click Explanations (Type: data) - S&P 500 (Hedged by Gold) ---
+            'beta_sp500': {
+                type: 'data',
+                title: 'S&P 500 Hedge Ratio',
+                name: '0.049',
+                description: "This is the ideal hedge ratio (Beta) showing how much Gold exposure offsets S&P 500 exposure for risk reduction. The positive number means assets move weakly together.",
+                context: "The figure 0.049 means that for every $1,000 invested in the S&P 500, you would sell roughly $49.00 of Gold to achieve the optimal hedge."
+            },
+            'var_reduction_sp500': {
+                type: 'data',
+                title: 'Hedge Effectiveness (%)',
+                name: '0.164%',
+                description: "Percent reduction in variance achieved by applying the static Gold hedge ratio to the S&P 500 exposure.",
+                context: "0.164% indicates a minimal reduction in volatility, showing Gold is a poor variance hedge for the S&P 500 in this period."
+            },
+            'original_vol_sp500': {
+                type: 'data',
+                title: 'Unhedged Annualised Volatility (%)',
+                name: '18.318%',
+                description: "Annualized volatility of the S&P 500 before any hedge is applied.",
+                context: "This is your baseline market risk for S&P 500 exposure."
+            },
+            'hedged_vol_sp500': {
+                type: 'data',
+                title: 'Hedged Annualised Volatility (%)',
+                name: '18.303%',
+                description: "Annualised volatility of the S&P 500 exposure after applying the optimal Gold hedge.",
+                context: "The value of 18.303% is basically the same as the unhedged 18.318%, reinforcing that the static hedge provides very little benefit in reducing general volatility."
+            },
+            'original_var_sp500': {
+                type: 'data',
+                title: 'Unhedged 95% Value-at-Risk (%)',
+                name: '1.554%',
+                description: "The maximum estimated daily loss you are 95% confident will not be exceeded in the S&P 500 exposure (unhedged).",
+                context: "A 1.554% VaR suggests that, on 95 out of 100 days, the S&P 500 is not expected to lose more than 1.554%."
+            },
+            'hedged_var_sp500': {
+                type: 'data',
+                title: 'Hedged 95% Value-at-Risk (%)',
+                name: '1.559%',
+                description: "The maximum estimated daily loss you are 95% confident will not be exceeded after applying the Gold hedge.",
+                context: "The change in VaR is negligible, demonstrating the limited effectiveness of this hedge."
+            },
+            'corr_mean_sp500': {
+                type: 'data',
+                title: '90-Day Rolling Correlation (Mean)',
+                name: '-0.024',
+                description: "The average correlation between S&P 500 and Gold returns over 90-day periods. A negative value indicates a tendency to move inversely.",
+                context: "The value of -0.024 confirms Gold is almost uncorrelated to the S&P 500, making it a good diversifier, but an imperfect hedge."
+            },
+            'corr_median_sp500': {
+                type: 'data',
+                title: '90-Day Rolling Correlation (Median)',
+                name: '-0.017',
+                description: "The median correlation between S&P 500 and Gold returns over 90-day periods.",
+                context: "The median is very close to the mean (-0.024), suggesting the correlation distribution is largely symmetric and free from extreme outliers."
+            },
+            'corr_std_sp500': {
+                type: 'data',
+                title: '90-Day Rolling Correlation (Volatility)',
+                name: '0.226',
+                description: "Volatility (standard deviation) of the 90-day rolling correlation time series.",
+                context: "A value of 0.226 indicates that the correlation itself is quite volatile, meaning the relationship between S&P 500 and Gold deviates over time."
+            },
+
+            // --- Data Click Explanations (Type: data) - VIX Index (Hedged by Gold) ---
+            'beta_vix': {
+                type: 'data',
+                title: 'VIX Index Hedge Ratio',
+                name: '0.242',
+                description: "The ideal hedge ratio (Beta) showing how much Gold exposure offsets VIX exposure for risk reduction.",
+                context: "The higher positive value of 0.242 means VIX and Gold are more correlated than S&P 500 and Gold. For every $1,000 in VIX,selling $242.00 in Gold is optimal."
+            },
+            'var_reduction_vix': {
+                type: 'data',
+                title: 'Hedge Effectiveness (%)',
+                name: '0.091%',
+                description: "Percent reduction in variance achieved by applying the Gold hedge ratio to the VIX exposure.",
+                context: "0.091% indicates a very small variance reduction. Although the hedge ratio is higher, the effectiveness is still extremely limited due to the inherent volatility of VIX."
+            },
+            'original_vol_vix': {
+                type: 'data',
+                title: 'Unhedged Annualized Volatility (%)',
+                name: '122.248%',
+                description: "Annualized volatility of the VIX Index before any hedge.",
+                context: "VIX is an extremely volatile derivative, often exhibiting volatility well over 100%, as confirmed by this baseline risk measure."
+            },
+            'hedged_vol_vix': {
+                type: 'data',
+                title: 'Hedged Annualized Volatility (%)',
+                name: '122.193%',
+                description: "Annualized volatility of the VIX Index exposure after applying the optimal Gold hedge.",
+                context: "The marginal reduction (from 122.248% to 122.193%) demonstrates that Gold, even with a moderately higher correlation, is **ineffective** at significantly reducing VIX's extreme volatility."
+            },
+            'original_var_vix': {
+                type: 'data',
+                title: 'Unhedged 95% Value-at-Risk (%)',
+                name: '12.301%',
+                description: "The maximum estimated daily loss you are 95% confident will not be exceeded in the VIX exposure (unhedged).",
+                context: "The 12.301% VaR highlights the severe daily tail risk associated with trading the VIX Index."
+            },
+            'hedged_var_vix': {
+                type: 'data',
+                title: 'Hedged 95% Value-at-Risk (%)',
+                name: '12.391%',
+                description: "The maximum estimated daily loss you are 95% confident will not be exceeded after applying the Gold hedge.",
+                context: "Similar to the S&P 500, Gold hedging ability is ineffective at reducing risk since the Fear Index is highly volatile itself." 
+            },
+            'corr_mean_vix': {
+                type: 'data',
+                title: '90-Day Rolling Correlation (Mean)',
+                name: '0.032',
+                description: "The average correlation between VIX and Gold returns over 90-day periods. A positive value indicates a tendency to move in the same direction.",
+                context: "The correlation of 0.032 indicates a  weak positive linear relationship, meaning Gold tends to slightly rise alongside the 'Fear Index' but the relionship is not strong."
+            },
+            'corr_median_vix': {
+                type: 'data',
+                title: '90-Day Rolling Correlation (Median)',
+                name: '0.011',
+                description: "The median correlation between VIX and Gold returns over 90-day periods.",
+                context: "The median (0.011) is slightly lower than the mean (0.032), indicating the positive relationship is sometimes boosted by short-term outliers."
+            },
+            'corr_std_vix': {
+                type: 'data',
+                title: '90-Day Rolling Correlation (Volatility)',
+                name: '0.190',
+                description: "Volatility (standard deviation) of the 90-day rolling correlation time series.",
+                context: "A value of 0.190 indicates that the correlation between VIX and Gold is unstable, similar to the S&P 500 correlation."
+            },
+        };
+
+        // General Modal Control
+        function showModal(id) {
+            const modal = document.getElementById(id);
+            const modalContent = modal.querySelector('.transform-modal');
+
+            // Apply opacity and visibility
+            modal.classList.remove('invisible', 'opacity-0');
+            modalContent.classList.remove('scale-95', 'opacity-0');
+            modalContent.classList.add('scale-100', 'opacity-100');
+
+            // Close modal when clicking outside
+            modal.onclick = (event) => {
+                if (event.target === modal) {
+                    hideModal(id);
+                }
+            };
+        }
+
+        function hideModal(id) {
+            const modal = document.getElementById(id);
+            const modalContent = modal.querySelector('.transform-modal');
+
+            // Apply transition effects for closing
+            modalContent.classList.remove('scale-100', 'opacity-100');
+            modalContent.classList.add('scale-95', 'opacity-0');
+
+            // Hide the modal completely after the transition
+            setTimeout(() => {
+                modal.classList.add('invisible', 'opacity-0');
+            }, 300); // Wait for transition to complete
+        }
+
+        window.closeModal = function() {
+            hideModal('explanation-modal');
+        }
+
+        window.closeComparisonModal = function() {
+            hideModal('comparison-modal');
+        }
+
+        window.openComparisonModal = function() {
+            showModal('comparison-modal');
+        }
+
+
+        // Main Explanation Modal Logic
+        function openModal(metric, asset, value) {
+            let key = '';
+
+            if (metric === 'info') {
+                // Clicked on the Metric Name column (first column)
+                key = `info_${asset}`;
+            } else {
+                // Clicked on the Data Value column (second or third column)
+                key = `${metric}_${asset}`;
+            }
+
+            const data = explanations[key];
+
+            if (!data) {
+                console.error('Explanation data not found for key:', key);
+                return;
+            }
+
+            // Update Modal Content
+            const modalTitle = document.getElementById('modal-title');
+            const modalMetricName = document.getElementById('modal-metric-name');
+            const modalDescription = document.getElementById('modal-description');
+            const modalContext = document.getElementById('modal-context');
+
+
+            if (data.type === 'info') {
+                // Metric Info Explanation
+                modalTitle.textContent = `Metric Definition: ${data.abbreviated}`;
+                modalMetricName.textContent = data.full;
+                modalDescription.innerHTML = `<strong>Definition:</strong> ${data.definition}`;
+                modalContext.innerHTML = `<strong>Context:</strong> ${data.context}`;
+            } else {
+                // Data Value Explanation
+                const assetName = asset === 'sp500' ? 'S&P 500' : 'VIX Index';
+                modalTitle.textContent = `${data.title} for ${assetName}`;
+                modalMetricName.textContent = `Value: ${data.name}`;
+                modalDescription.innerHTML = `<strong>Explanation:</strong> ${data.description}`;
+                modalContext.innerHTML = `<strong>Financial Implication:</strong> ${data.context}`;
+            }
+
+            showModal('explanation-modal');
+        }
+
+
+        // Event Listener Setup
+        document.addEventListener('DOMContentLoaded', () => {
+            const table = document.querySelector('table');
+            
+            if (table) {
+                table.addEventListener('click', (event) => {
+                    let target = event.target;
+                    
+                    // Traverse up to find the closest element with the 'data-metric' attribute
+                    while (target && target !== table && !target.dataset.metric) {
+                        target = target.parentElement;
+                    }
+
+                    if (target && target.dataset.metric) {
+                        const metric = target.dataset.metric;
+                        const asset = target.dataset.asset;
+                        const value = target.dataset.value;
+                        
+                        openModal(metric, asset, value);
+                    }
+                });
+            }
+        });
+    </script>
+</body>
+</html>
