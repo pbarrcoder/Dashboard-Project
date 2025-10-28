@@ -1,0 +1,192 @@
+import pandas as pd
+import numpy as np
+
+# --- 1. CONFIGURATION AND CONSTANTS ---
+ANNUAL_DAYS = 252 # Standard number of trading days in a year
+CONFIDENCE_LEVEL = 0.95 # For Value-at-Risk (VaR) calculation (95%)
+# CHANGED: Using 'Adj Close' as the default price column, as 'Close' is often missing.
+# If your files use 'Price' or another name, change this variable.
+PRICE_COLUMN = 'Close' 
+
+# --- 2. HELPER FUNCTIONS FOR DATA PREPARATION (FIXED) ---
+
+def prepare_returns_data(file_name, price_col, index_name):
+    """
+    Loads a historical CSV file, cleans the data, calculates daily returns,
+    and returns a clean, indexed Series of returns. Includes error handling
+    for common missing columns.
+    """
+    print(f"Loading and processing {file_name}...")
+    try:
+        df = pd.read_csv(file_name, index_col='Date', parse_dates=True)
+    except FileNotFoundError:
+        print(f"ERROR: File not found: {file_name}. Please ensure the file is in the same directory.")
+        return None
+    except Exception as e:
+        print(f"ERROR loading {file_name}: {e}")
+        return None
+
+    # --- FIX FOR KeyError: 'Close' ---
+    # Check for the specified PRICE_COLUMN and common alternatives
+    if price_col in df.columns:
+        col_to_use = price_col
+    elif 'Adj Close' in df.columns:
+        col_to_use = 'Adj Close'
+    elif 'Close' in df.columns: # Fallback to 'Close' if 'Adj Close' is preferred but not found
+        col_to_use = 'Close'
+    elif 'Price' in df.columns:
+        col_to_use = 'Price'
+    else:
+        print(f"CRITICAL ERROR in {file_name}: Cannot find a valid price column ('{price_col}', 'Adj Close', or 'Close').")
+        print(f"Available columns: {list(df.columns)}")
+        return None
+    # --- END FIX ---
+    
+    print(f"  -> Using column: {col_to_use}")
+
+    # Handle common issues like commas in price columns
+    if df[col_to_use].dtype == 'object':
+        df[col_to_use] = df[col_to_use].astype(str).str.replace(',', '', regex=False).astype(float)
+
+    # Calculate daily returns: R_t = (P_t / P_{t-1}) - 1
+    returns = df[col_to_use].pct_change().rename(f'{index_name}_Returns')
+
+    return returns.dropna()
+
+def align_dataframes(target_returns, hedge_returns):
+    """
+    Merges target and hedge returns on their shared date index.
+    """
+    # Combine the two return series
+    combined_df = pd.merge(
+        target_returns,
+        hedge_returns,
+        left_index=True,
+        right_index=True,
+        how='inner' # Use 'inner' to only keep dates where both assets have data
+    )
+    return combined_df.dropna()
+
+# --- 3. CORE HEDGING CALCULATION FUNCTION (UNCHANGED) ---
+
+def calculate_hedge_stats(returns_df, target_col, hedge_col):
+    """
+    Calculates Static Hedging and VaR metrics based on the input return series.
+    """
+    R_T = returns_df[target_col]
+    R_H = returns_df[hedge_col]
+
+    # 1. Optimal Static Hedge Ratio (Static Beta)
+    # Formula: Beta = Cov(R_T, R_H) / Var(R_H)
+    static_beta = R_T.cov(R_H) / R_H.var()
+
+    # 2. Original Volatility (Target Asset)
+    vol_target_annual = R_T.std() * np.sqrt(ANNUAL_DAYS)
+
+    # 3. Hedged Portfolio Returns
+    # Portfolio Return: R_P = R_T - (Beta * R_H)
+    R_P_hedged = R_T - (static_beta * R_H)
+
+    # 4. Hedged Volatility
+    vol_hedged_annual = R_P_hedged.std() * np.sqrt(ANNUAL_DAYS)
+
+    # 5. Variance Reduction Percentage (Hedge Effectiveness)
+    # Formula: (1 - Var(R_Hedged) / Var(R_Target)) * 100
+    variance_reduction = (1 - (R_P_hedged.var() / R_T.var())) * 100
+
+    # 6. Value-at-Risk (VaR 95% Daily)
+    # VaR is the negative of the 5th percentile of the return distribution.
+    var_target_daily = -np.percentile(R_T, (1 - CONFIDENCE_LEVEL) * 100) * 100
+    var_hedged_daily = -np.percentile(R_P_hedged, (1 - CONFIDENCE_LEVEL) * 100) * 100
+    
+    # 7. Correlation (90-day Rolling)
+    rolling_corr = R_T.rolling(window=90).corr(R_H).dropna()
+
+    # Compile Results
+    results = {
+        "Target Asset": target_col,
+        "Static Beta (Optimal Hedge Ratio)": static_beta,
+        "Static Var. Reduction %": variance_reduction,
+        "Original Ann. Volatility %": vol_target_annual * 100,
+        "Hedged Ann. Volatility %": vol_hedged_annual * 100,
+        f"Original {int(CONFIDENCE_LEVEL*100)}% VaR % (Daily)": var_target_daily,
+        f"Hedged {int(CONFIDENCE_LEVEL*100)}% VaR % (Daily)": var_hedged_daily,
+        "Rolling Correlation (Mean)": rolling_corr.mean(),
+        "Rolling Correlation (Median)": rolling_corr.median(),
+        "Rolling Correlation (Std Dev)": rolling_corr.std()
+    }
+
+    return results
+
+# --- 4. MAIN EXECUTION ---
+
+if __name__ == '__main__':
+    
+    # Define file paths based on user's uploaded files
+    SP500_FILE = 'S&P Historical Data.csv'
+    VIX_FILE = 'CBOE Volatility Index Historical Data.csv'
+    BTC_FILE = 'Bitcoin Historical Data.csv'
+    
+    # --- STEP 1: LOAD AND PREPARE RETURNS DATA ---
+    
+    # Prepare individual returns series
+    sp500_returns = prepare_returns_data(SP500_FILE, PRICE_COLUMN, 'SP500')
+    vix_returns = prepare_returns_data(VIX_FILE, PRICE_COLUMN, 'VIX')
+    btc_returns = prepare_returns_data(BTC_FILE, PRICE_COLUMN, 'BTC')
+    
+    if sp500_returns is None or vix_returns is None or btc_returns is None:
+        print("\nAnalysis failed due to missing or unreadable files.")
+        exit()
+
+    # --- STEP 2: ALIGN DATA AND CALCULATE METRICS ---
+    
+    # A. SP500 Hedged by BTC
+    sp500_btc_df = align_dataframes(sp500_returns, btc_returns)
+    sp500_stats = calculate_hedge_stats(sp500_btc_df, 'SP500_Returns', 'BTC_Returns')
+    
+    # B. VIX Hedged by BTC
+    vix_btc_df = align_dataframes(vix_returns, btc_returns)
+    vix_stats = calculate_hedge_stats(vix_btc_df, 'VIX_Returns', 'BTC_Returns')
+    
+    # --- STEP 3: DISPLAY RESULTS ---
+    
+    print("\n" + "="*90)
+    print("                CRYPTO HEDGING EFFECTIVENESS ANALYSIS (Historical Data)")
+    print(f"                   Sample Period: {sp500_btc_df.index.min().strftime('%Y-%m-%d')} to {sp500_btc_df.index.max().strftime('%Y-%m-%d')} ({len(sp500_btc_df)} trading days)")
+    print("="*90)
+    
+    # Define the order for the display
+    metrics_to_display = [
+        "Static Beta (Optimal Hedge Ratio)",
+        "Static Var. Reduction %",
+        "Original Ann. Volatility %",
+        "Hedged Ann. Volatility %",
+        f"Original {int(CONFIDENCE_LEVEL*100)}% VaR % (Daily)",
+        f"Hedged {int(CONFIDENCE_LEVEL*100)}% VaR % (Daily)",
+        "Rolling Correlation (Mean)",
+        "Rolling Correlation (Median)",
+        "Rolling Correlation (Std Dev)"
+    ]
+    
+    # Print the header row
+    print(f"{'METRIC':<45} | {'S&P 500 (Hedged by BTC)':^25} | {'VIX Index (Hedged by BTC)':^25}")
+    print("-" * 45 + "+" + "-" * 27 + "+" + "-" * 27)
+    
+    # Print the data rows
+    for metric in metrics_to_display:
+        sp500_val = sp500_stats.get(metric, 'N/A')
+        vix_val = vix_stats.get(metric, 'N/A')
+        
+        # Format the output based on whether it is a percentage or a raw ratio
+        if "VaR %" in metric or "Volatility %" in metric or "Reduction %" in metric:
+            sp500_str = f"{sp500_val:^25.4f}"
+            vix_str = f"{vix_val:^25.4f}"
+        else:
+            sp500_str = f"{sp500_val:^25.4f}"
+            vix_str = f"{vix_val:^25.4f}"
+        
+        print(f"{metric:<45} | {sp500_str} | {vix_str}")
+        
+    print("="*90 + "\n")
+    
+    print("Analysis Complete. The figures above are derived directly from your 10-year historical CSV data.")
