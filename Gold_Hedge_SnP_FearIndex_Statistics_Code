@@ -1,0 +1,197 @@
+import pandas as pd
+import numpy as np
+import sys
+import os # Import the os module for path manipulation
+
+# --- 1. CONFIGURATION AND CONSTANTS ---
+ANNUAL_DAYS = 252 # Standard number of trading days in a year
+CONFIDENCE_LEVEL = 0.95 # For Value-at-Risk (VaR) calculation (95%)
+
+# ABSOLUTE PATH FIX: We are setting the base directory to the path 
+# visible in your error message. This resolves the FileNotFoundError.
+# IMPORTANT: If you move this folder, you MUST update this path.
+BASE_DIR = 'c:/Users/peter_bkbowcp/OneDrive/Desktop/Dashboard Project' 
+
+# Use os.path.join to create platform-independent, full file paths
+SP500_FILE = os.path.join(BASE_DIR, 'S&P Historical Data.csv')
+VIX_FILE = os.path.join(BASE_DIR, 'CBOE Volatility Index Historical Data.csv')
+GOLD_FILE = os.path.join(BASE_DIR, 'Gold Futures Historical Data.csv')
+
+# --- 2. CORE FUNCTIONS FOR DATA PREPARATION ---
+
+def prepare_returns_data(file_path, index_name):
+    """
+    Loads a historical CSV file, robustly identifies a price column,
+    cleans the data, and calculates daily returns.
+    """
+    # NOTE: file_path is now the ABSOLUTE path
+    print(f"Loading and processing {file_path}...")
+    try:
+        # Assuming 'Date' is present and should be the index
+        df = pd.read_csv(file_path, index_col='Date', parse_dates=True)
+    except FileNotFoundError:
+        # This will now print the full path that failed
+        print(f"CRITICAL ERROR: File not found at the hardcoded path: {file_path}")
+        print("Please verify the BASE_DIR variable in the script is correct and the files exist there.")
+        return None
+    except Exception as e:
+        print(f"ERROR loading {file_path}: {e}")
+        return None
+
+    # Define common price columns in preferred order (Fixes the original KeyError)
+    potential_cols = ['Close', 'Adj Close', 'Price', 'Close/Last']
+    col_to_use = None
+
+    for col in potential_cols:
+        if col in df.columns:
+            col_to_use = col
+            break
+            
+    if col_to_use is None:
+        print(f"CRITICAL ERROR in {file_path}: Cannot find a valid price column ('Close', 'Adj Close', etc.).")
+        print(f"Available columns: {list(df.columns)}")
+        sys.exit(1)
+    
+    print(f"  -> Successfully using column: {col_to_use}")
+
+    # Handle common issues like commas/non-numeric values in price columns
+    if df[col_to_use].dtype == 'object':
+        df[col_to_use] = df[col_to_use].astype(str).str.replace(r'[$,]', '', regex=True)
+        df[col_to_use] = pd.to_numeric(df[col_to_use], errors='coerce')
+
+    # Calculate daily returns: R_t = (P_t / P_{t-1}) - 1
+    returns = df[col_to_use].pct_change().rename(f'{index_name}_Returns')
+
+    return returns.dropna()
+
+def align_dataframes(target_returns, hedge_returns, target_name):
+    """Merges target and hedge returns on their shared date index."""
+    combined_df = pd.merge(
+        target_returns,
+        hedge_returns,
+        left_index=True,
+        right_index=True,
+        how='inner' 
+    )
+    if combined_df.empty:
+        print(f"Warning: No overlapping dates found between {target_name} and Gold.")
+        return None
+        
+    return combined_df.dropna()
+
+# --- 3. CORE HEDGING CALCULATION FUNCTION ---
+
+def calculate_hedge_stats(returns_df, target_col, hedge_col):
+    """Calculates Static Hedging and VaR metrics based on the input return series."""
+    R_T = returns_df[target_col]
+    R_H = returns_df[hedge_col]
+
+    # 1. Optimal Static Hedge Ratio (Static Beta)
+    static_beta = R_T.cov(R_H) / R_H.var()
+
+    # 2. Original Volatility (Target Asset)
+    vol_target_annual = R_T.std() * np.sqrt(ANNUAL_DAYS)
+
+    # 3. Hedged Portfolio Returns
+    R_P_hedged = R_T - (static_beta * R_H)
+
+    # 4. Hedged Volatility
+    vol_hedged_annual = R_P_hedged.std() * np.sqrt(ANNUAL_DAYS)
+
+    # 5. Variance Reduction Percentage (Hedge Effectiveness)
+    variance_reduction = (1 - (R_P_hedged.var() / R_T.var())) * 100
+
+    # 6. Value-at-Risk (VaR 95% Daily)
+    var_target_daily = -np.percentile(R_T, (1 - CONFIDENCE_LEVEL) * 100) * 100
+    var_hedged_daily = -np.percentile(R_P_hedged, (1 - CONFIDENCE_LEVEL) * 100) * 100
+    
+    # 7. Correlation (90-day Rolling)
+    rolling_corr = R_T.rolling(window=90).corr(R_H).dropna()
+
+    # Compile Results
+    results = {
+        "Target Asset": target_col.replace('_Returns', ''),
+        "Static Beta (Optimal Hedge Ratio)": static_beta,
+        "Static Var. Reduction %": variance_reduction,
+        "Original Ann. Volatility %": vol_target_annual * 100,
+        "Hedged Ann. Volatility %": vol_hedged_annual * 100,
+        f"Original {int(CONFIDENCE_LEVEL*100)}% VaR % (Daily)": var_target_daily,
+        f"Hedged {int(CONFIDENCE_LEVEL*100)}% VaR % (Daily)": var_hedged_daily,
+        "Rolling Correlation (Mean)": rolling_corr.mean(),
+        "Rolling Correlation (Median)": rolling_corr.median(),
+        "Rolling Correlation (Std Dev)": rolling_corr.std(),
+        "Data Points": len(R_T)
+    }
+
+    return results
+
+# --- 4. MAIN EXECUTION ---
+
+if __name__ == '__main__':
+    
+    # --- STEP 1: LOAD AND PREPARE RETURNS DATA ---
+    sp500_returns = prepare_returns_data(SP500_FILE, 'SP500')
+    vix_returns = prepare_returns_data(VIX_FILE, 'VIX')
+    gold_returns = prepare_returns_data(GOLD_FILE, 'Gold')
+    
+    # Check for any failures and exit if critical data is missing
+    if sp500_returns is None or vix_returns is None or gold_returns is None:
+        print("\nAnalysis stopped.")
+        sys.exit(1)
+
+    # --- STEP 2: ALIGN DATA AND CALCULATE METRICS ---
+    
+    # A. SP500 Hedged by Gold
+    sp500_gold_df = align_dataframes(sp500_returns, gold_returns, 'S&P 500')
+    sp500_stats = calculate_hedge_stats(sp500_gold_df, 'SP500_Returns', 'Gold_Returns') if sp500_gold_df is not None else None
+    
+    # B. VIX Hedged by Gold
+    vix_gold_df = align_dataframes(vix_returns, gold_returns, 'VIX Index')
+    vix_stats = calculate_hedge_stats(vix_gold_df, 'VIX_Returns', 'Gold_Returns') if vix_gold_df is not None else None
+    
+    # --- STEP 3: DISPLAY RESULTS ---
+    
+    if sp500_stats is None or vix_stats is None:
+        print("\nSkipping results display due to insufficient or non-overlapping data.")
+        sys.exit(1)
+        
+    print("\n" + "="*90)
+    print("                GOLD HEDGING EFFECTIVENESS ANALYSIS (Historical Data)")
+    print(f"                   Sample Period: {sp500_gold_df.index.min().strftime('%Y-%m-%d')} to {sp500_gold_df.index.max().strftime('%Y-%m-%d')} ({sp500_stats['Data Points']} trading days)")
+    print("="*90)
+    
+    # Define the order for the display
+    metrics_to_display = [
+        "Static Beta (Optimal Hedge Ratio)",
+        "Static Var. Reduction %",
+        "Original Ann. Volatility %",
+        "Hedged Ann. Volatility %",
+        f"Original {int(CONFIDENCE_LEVEL*100)}% VaR % (Daily)",
+        f"Hedged {int(CONFIDENCE_LEVEL*100)}% VaR % (Daily)",
+        "Rolling Correlation (Mean)",
+        "Rolling Correlation (Median)",
+        "Rolling Correlation (Std Dev)"
+    ]
+    
+    # Print the header row
+    print(f"{'METRIC':<45} | {'S&P 500 (Hedged by Gold)':^25} | {'VIX Index (Hedged by Gold)':^25}")
+    print("-" * 45 + "+" + "-" * 27 + "+" + "-" * 27)
+    
+    # Print the data rows
+    for metric in metrics_to_display:
+        sp500_val = sp500_stats.get(metric, 'N/A')
+        vix_val = vix_stats.get(metric, 'N/A')
+        
+        # Format the output to 4 decimal places
+        if isinstance(sp500_val, (int, float)) and isinstance(vix_val, (int, float)):
+            sp500_str = f"{sp500_val:^25.4f}"
+            vix_str = f"{vix_val:^25.4f}"
+        else:
+             sp500_str = f"{sp500_val:^25}"
+             vix_str = f"{vix_val:^25}"
+        
+        print(f"{metric:<45} | {sp500_str} | {vix_str}")
+        
+    print("="*90 + "\n")
+    
+    print("Analysis Complete. The script successfully used the full paths to your files.")
