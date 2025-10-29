@@ -1,0 +1,166 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from pathlib import Path
+import numpy as np
+
+# --- Configuration: File Names and Analysis Parameters ---
+DATA_DIRECTORY = Path("C:/Users/peter_bkbowcp/OneDrive/Desktop/Dashboard Project")
+
+GOLD_FILE = DATA_DIRECTORY / "Gold Futures Historical Data.csv"
+BTC_FILE  = DATA_DIRECTORY / "Bitcoin Historical Data.csv"
+SP_FILE   = DATA_DIRECTORY / "S&P Historical Data.csv"
+
+ROLLING_WINDOW = 60
+CLOSE_CANDIDATES = ["Close", "Adj Close", "Close*", "Price", "Last", "Close/Last"]
+
+# Colors
+BTC_CORR_COLOR = "#003366"   # deep navy for BTC vs SP
+GOLD_CORR_COLOR = "#CC8400"  # golden orange for Gold vs SP
+
+# --- Helpers ---
+def clean_numeric_series(s):
+    return (s.astype(str)
+              .str.replace('"', '', regex=False)
+              .str.replace("'", "", regex=False)
+              .str.replace(",", "", regex=False)
+              .str.strip()
+              .replace("", pd.NA)
+              .astype(float)
+            )
+
+def load_and_clean(filepath, label):
+    if not Path(filepath).exists():
+        raise FileNotFoundError(f"File not found: {filepath}.")
+    df = pd.read_csv(filepath, skip_blank_lines=True)
+    df.columns = [c.strip() for c in df.columns]
+
+    # Find date column
+    date_col = next((c for c in df.columns if c.strip().lower() in ["date", "day", "time"]), None)
+    if date_col is None:
+        raise ValueError(f"No 'Date' column found in {filepath.name}")
+    df["Date"] = pd.to_datetime(df[date_col].astype(str).str.replace('"','').str.strip(), errors='coerce')
+    df = df.drop(columns=[c for c in [date_col] if c != "Date"], errors='ignore')
+
+    # Find close column
+    close_col = next((c for c in df.columns for cand in CLOSE_CANDIDATES if c.strip().lower() == cand.strip().lower()), None)
+    if close_col is None:
+        # fallback: choose first numeric column that's not Date
+        numeric_candidates = [c for c in df.columns if c != "Date" and df[c].astype(str).str.contains(r'[\d]').any()]
+        close_col = numeric_candidates[0] if numeric_candidates else None
+    if close_col is None:
+        raise ValueError(f"No valid price column found in {filepath.name}")
+
+    df["Close"] = clean_numeric_series(df[close_col])
+    df = df[["Date", "Close"]].dropna(subset=["Date", "Close"]).sort_values("Date").reset_index(drop=True)
+    df = df.rename(columns={"Close": f"Close_{label}"})
+    return df
+
+# --- Main plotting function ---
+def plot_combined_correlation():
+    try:
+        gold_df = load_and_clean(GOLD_FILE, "GOLD")
+        btc_df  = load_and_clean(BTC_FILE, "BTC")
+        sp_df   = load_and_clean(SP_FILE, "SP")
+    except Exception as e:
+        print("FATAL ERROR:", e)
+        return
+
+    # Merge on Date
+    combined = gold_df.merge(btc_df, on="Date", how="inner").merge(sp_df, on="Date", how="inner")
+    if combined.empty:
+        print("No overlapping dates across files.")
+        return
+
+    # Calculate daily returns
+    combined["GOLD_Change"] = combined["Close_GOLD"].pct_change()
+    combined["BTC_Change"]  = combined["Close_BTC"].pct_change()
+    combined["SP_Change"]   = combined["Close_SP"].pct_change()
+    combined = combined.dropna(subset=["GOLD_Change", "BTC_Change", "SP_Change"]).reset_index(drop=True)
+    if combined.empty:
+        print("Not enough data after computing returns.")
+        return
+
+    # Compute rolling correlations:
+    corr_btc_sp = combined["BTC_Change"].rolling(window=ROLLING_WINDOW).corr(combined["SP_Change"])
+    corr_gold_sp = combined["GOLD_Change"].rolling(window=ROLLING_WINDOW).corr(combined["SP_Change"])
+
+    # Create a DataFrame for stats & easier indexing
+    corr_df = pd.DataFrame({
+        "Date": combined["Date"],
+        "BTC_SP": corr_btc_sp,
+        "GOLD_SP": corr_gold_sp
+    })
+
+    # --- Descriptive stats for both series ---
+    def summarize_series(series, name):
+        s = series.dropna()
+        if s.empty:
+            return None
+        mean = s.mean()
+        median = s.median()
+        idx_max = s.idxmax()
+        idx_min = s.idxmin()
+        max_val = s.loc[idx_max]
+        min_val = s.loc[idx_min]
+        date_max = corr_df.loc[idx_max, "Date"] if pd.notna(idx_max) else pd.NaT
+        date_min = corr_df.loc[idx_min, "Date"] if pd.notna(idx_min) else pd.NaT
+        count = s.shape[0]
+        return {
+            "name": name,
+            "mean": mean, "median": median,
+            "max": max_val, "date_max": date_max,
+            "min": min_val, "date_min": date_min,
+            "count": count
+        }
+
+    stats_btc_sp = summarize_series(corr_df["BTC_SP"], "BTC vs S&P")
+    stats_gold_sp = summarize_series(corr_df["GOLD_SP"], "Gold vs S&P")
+
+    # Print summaries
+    print("\n--- Rolling Correlation Descriptive Statistics ---")
+    for st in (stats_btc_sp, stats_gold_sp):
+        if st is None:
+            print(f"{st['name'] if st else 'Series'}: not enough data")
+            continue
+        print(f"\n{st['name']}:")
+        print(f"  Observations (non-null rolling values): {st['count']}")
+        print(f"  Mean correlation:   {st['mean']:.4f}")
+        print(f"  Median correlation: {st['median']:.4f}")
+        print(f"  Max correlation:    {st['max']:.4f} (around {st['date_max'].strftime('%Y-%m-%d') if pd.notna(st['date_max']) else 'N/A'})")
+        print(f"  Min correlation:    {st['min']:.4f} (around {st['date_min'].strftime('%Y-%m-%d') if pd.notna(st['date_min']) else 'N/A'})")
+
+    # --- Plotting ---
+    plt.style.use('default')
+    fig, ax = plt.subplots(figsize=(16, 8))
+
+    ax.plot(corr_df["Date"], corr_df["BTC_SP"], 
+            label=f"{ROLLING_WINDOW}-Day Rolling Corr (BTC vs S&P)", 
+            color=BTC_CORR_COLOR, linewidth=2.5, zorder=5)
+    
+    ax.plot(corr_df["Date"], corr_df["GOLD_SP"], 
+            label=f"{ROLLING_WINDOW}-Day Rolling Corr (Gold vs S&P)", 
+            color=GOLD_CORR_COLOR, linewidth=2.5, zorder=6)
+
+    # zero line
+    ax.axhline(0.0, color='black', linestyle='-', linewidth=1.2, alpha=0.8, zorder=1)
+
+    # axis formatting
+    ax.set_ylim(-1.0, 1.0)
+    years = mdates.YearLocator()
+    years_fmt = mdates.DateFormatter('%Y')
+    ax.xaxis.set_major_locator(years)
+    ax.xaxis.set_major_formatter(years_fmt)
+    plt.xticks(rotation=0)
+
+    ax.set_xlabel("Date", fontsize=12)
+    ax.set_ylabel("Correlation Coefficient (ρ)", fontsize=12, fontweight='bold')
+    ax.set_title(f"{ROLLING_WINDOW}-Day Rolling Correlations: BTC vs S&P and Gold vs S&P", 
+                 fontsize=16, fontweight='bold', pad=14)
+
+    ax.legend(loc='lower left', fontsize=11, frameon=True)
+    plt.tight_layout()
+    plt.show()
+
+if __name__ == "__main__":
+    plot_combined_correlation()
