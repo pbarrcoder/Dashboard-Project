@@ -142,3 +142,116 @@ def plot_rolling_correlation():
     
 if __name__ == "__main__":
     plot_rolling_correlation()
+
+# Comments from Chat GPT
+🧭 Comprehensive Interpretation: 60-Day Rolling Correlation between Gold and Bitcoin (2015-2025)
+1. What the chart and statistics show in plain language
+
+This plot measures how Gold and Bitcoin daily returns have moved together (or apart) over a 60-trading-day window — roughly three months.
+The correlation coefficient (ρ) ranges from −1 (perfectly opposite moves) to +1 (perfectly in sync).
+
+Your calculated stats:
+
+Metric	Value	Interpretation
+Mean correlation	0.0821	On average, Gold and BTC barely move together — essentially uncorrelated.
+Median correlation	0.0688	The “typical” short-term relationship is slightly positive but weak.
+Maximum correlation	+0.5432 (Sep 2020)	At that point, they moved together fairly strongly — moderate positive regime.
+Minimum correlation	−0.3140 (Dec 2023)	Brief episode where they moved in opposite directions — modest negative regime.
+Period covered	Oct 2015 – Oct 2025	About a decade of overlapping data (2,512 rolling values).
+Bottom line:
+
+Over ten years, the average relationship is weak (≈ 0.08) and often fluctuates around zero.
+That confirms what your graph shows visually — no stable or structural correlation between Gold and Bitcoin. The relationship drifts through short-lived positive and negative phases.
+
+2. Interpreting the correlation levels
+🟦 Most of the time (ρ ≈ 0 – 0.1)
+
+Gold and Bitcoin are statistically independent — they don’t predict each other.
+This is ideal for diversification: owning both reduces total portfolio variance because they usually don’t move together.
+
+🟧 When correlation spikes upward (ρ → +0.5)
+
+Periods like mid-2020 show a moderate positive link — both assets rose together.
+That window coincides with:
+
+Massive liquidity injections during COVID stimulus,
+
+Inflation hedging narrative driving both “hard asset” demand,
+
+BTC rallying alongside gold as investors sought alternatives to fiat.
+
+Here, gold’s safe-haven behavior aligned with bitcoin’s “digital gold” story — but this coupling didn’t last.
+
+🟪 When correlation dips (ρ → −0.3)
+
+Episodes like late 2023 show inverse movement — bitcoin rallied while gold stalled, or vice versa.
+These negative patches imply risk-rotation: investors moving capital between “risk” (BTC) and “defensive” (gold) assets, depending on macro sentiment.
+
+3. Volatility and sensitivity analysis
+⚡ Bitcoin dominates short-term correlation shifts
+
+Bitcoin’s daily volatility is an order of magnitude higher than gold’s (commonly 50-80% annualized vs. gold’s ~15%).
+
+Because correlation uses normalized returns, BTC’s large moves swing the correlation line far more than gold’s steadier fluctuations.
+
+During market stress or crypto-specific shocks (FTX collapse, regulatory crackdowns, liquidity crunches), the correlation can sharply turn negative as BTC sells off while gold is stable or gains slightly.
+
+💹 Gold is the “slow mover”
+
+Gold’s price adjusts gradually to macro forces like real yields, inflation, and central-bank demand — so its volatility is low and its contribution to correlation swings is minor.
+Thus, BTC’s extreme bursts of volatility drive most of the rolling correlation instability.
+
+4. Regime behaviour and macro interpretation
+🔸 2015–2017: Low, noisy correlation near zero
+
+Bitcoin was tiny, speculative, and detached from macro assets — correlation hovered around zero.
+
+🔸 2020–2021: Positive regime (peak = 0.54 @ Sep 2020)
+
+Global stimulus, negative real rates, and inflation fears pushed both gold and BTC higher.
+Investors treated both as store-of-value hedges. The “digital gold” narrative gained traction.
+But as risk appetite surged in late 2020, BTC’s speculative boom outpaced gold — correlation drifted back toward zero.
+
+🔸 2022–2023: Choppy, mixed signals
+
+Rising rates hurt both assets intermittently, but BTC’s drawdowns (Terra/FTX crises) were idiosyncratic, producing sharp negative correlations as gold remained steady or gained.
+Minimum ρ = −0.314 (Dec 2023) marks such a risk-off period where investors fled BTC but held or rotated into gold.
+
+🔸 2024–2025: Mild positive recovery
+
+The tail end shows correlation stabilizing slightly positive again — possibly reflecting both reacting to macro factors like rate expectations and inflation trends rather than crypto-specific chaos.
+
+5. Comparison to empirical research
+
+Extensive empirical work supports your observed pattern:
+
+Finding	Supported by research
+Gold consistently retains safe-haven status	Studies (Baur & Lucey 2010; Kumar et al. 2022) show gold provides downside protection in crises.
+Bitcoin behaves inconsistently	Klein et al. (2018) and Choi et al. (2021) show BTC’s correlations with traditional assets and gold are unstable and regime-dependent.
+BTC more sensitive to market volatility	DCC-GARCH and regime-switching analyses confirm BTC’s correlation with other assets spikes during turmoil and falls back afterward.
+“Digital gold” claim is conditional	Works after 2020 (e.g., Wen et al. 2022) find short bursts of positive correlation driven by inflation narratives, not by intrinsic safe-haven properties.
+
+So your data lines up with the consensus: gold = stable safe haven, BTC = volatility-sensitive speculative asset whose correlation varies with liquidity and risk cycles.
+
+6. Portfolio and practical implications
+
+Average correlation ≈ 0.08 → strong diversification value.
+Holding both reduces risk without severely dampening upside potential.
+
+Dynamic rebalancing matters.
+During high correlation spikes (> 0.4), gold loses some hedging power; rebalance positions or hedge differently.
+
+Monitor BTC volatility as a leading indicator of correlation swings — large BTC variance often precedes correlation shifts.
+
+Don’t rely on BTC as a crisis hedge.
+Negative correlation periods exist but are sporadic; gold remains the reliable defensive component.
+
+7. Final synthesis (no sugar-coating)
+
+This ten-year rolling-correlation analysis shows no stable or consistent relationship between gold and bitcoin.
+The average correlation is close to zero (0.08) — they usually move independently.
+Occasional positive surges (like 2020) occur when both respond to macro liquidity or inflation narratives, but these phases are short-lived.
+During market volatility or crypto-specific stress, correlation often turns negative, reflecting BTC’s risk-asset nature versus gold’s defensive role.
+In short:
+
+Gold remains the classic safe haven; Bitcoin remains a volatile, sentiment-driven asset occasionally mimicking gold but often behaving like high-beta risk capital.
