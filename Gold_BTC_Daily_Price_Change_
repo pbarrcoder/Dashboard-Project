@@ -1,0 +1,148 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import os
+from pathlib import Path
+
+# --- Configuration: File Names ---
+# Data files are assumed to be in the "Dashboard Project" folder based on previous steps.
+DATA_DIRECTORY = Path("C:/Users/peter_bkbowcp/OneDrive/Desktop/Dashboard Project")
+
+GOLD_FILE = DATA_DIRECTORY / "Gold Futures Historical Data.csv"
+BTC_FILE  = DATA_DIRECTORY / "Bitcoin Historical Data.csv"
+
+CLOSE_CANDIDATES = ["Close", "Adj Close", "Close*", "Price", "Last", "Close/Last"]
+
+# --- Helper functions (Reused for Robust Data Cleaning) ---
+
+def clean_numeric_series(s):
+    """
+    Cleans a pandas Series by removing common non-numeric characters (quotes, 
+    commas, whitespace) and converts it to float, replacing empty strings with NA.
+    """
+    return (s.astype(str)
+             .str.replace('"', '', regex=False)
+             .str.replace("'", "", regex=False)
+             .str.replace(",", "", regex=False)
+             .str.strip()
+             .replace("", pd.NA)
+             .astype(float)
+           )
+
+def load_and_clean(filepath, ticker_label):
+    """
+    Loads a CSV file, identifies Date and a Close price column, cleans the data,
+    and returns a DataFrame with 'Date' and cleaned 'Close' prices.
+    """
+    # Check if the file exists using the Path object
+    if not Path(filepath).exists():
+        # Raise an informative error including the full path checked
+        raise FileNotFoundError(f"File not found: {filepath.name}. Checked location: {filepath.parent}")
+    
+    # Read CSV and strip whitespace from headers
+    df = pd.read_csv(filepath, skip_blank_lines=True)
+    df.columns = [c.strip() for c in df.columns]
+
+    # Identify and clean the Date column
+    date_col = next((c for c in df.columns if c.strip().lower() in ["date", "day", "time"]), None)
+    if date_col is None:
+        raise ValueError(f"No 'Date' column found in {filepath.name}")
+    df[date_col] = pd.to_datetime(df[date_col].astype(str).str.replace('"', '').str.strip(), errors='coerce')
+    df = df.rename(columns={date_col: "Date"})
+
+    # Identify the closing price column
+    close_col = next((c for c in df.columns for cand in CLOSE_CANDIDATES if c.strip().lower() == cand.strip().lower()), None)
+    
+    # If a standard close column isn't found, look for the first column that contains numeric data
+    if close_col is None:
+        numeric_cols = [c for c in df.columns if c != "Date" and df[c].astype(str).str.contains(r'[\d]').any()]
+        if numeric_cols:
+            # If a specific 'Close' is not found, take the first column that looks numeric (e.g., 'Price')
+            close_col = numeric_cols[0]
+            
+    if close_col is None:
+        raise ValueError(f"No valid price column found in {filepath.name}")
+    
+    # Apply cleaning and final structuring
+    df["Close"] = clean_numeric_series(df[close_col])
+    df = df[["Date", "Close"]].dropna(subset=["Date", "Close"]).sort_values("Date").reset_index(drop=True)
+    return df
+
+# --- Main plotting function ---
+def plot_daily_change():
+    """
+    Loads Gold and BTC data, calculates daily percentage change for both,
+    and plots the two time series against each other without any annotations.
+    """
+    try:
+        # Load data using the hardcoded absolute paths
+        gold_df = load_and_clean(GOLD_FILE, "GOLD")
+        btc_df  = load_and_clean(BTC_FILE, "BTC")
+    except FileNotFoundError as e:
+        print(f"FATAL ERROR: {e}")
+        print("\nACTION REQUIRED: Please double-check the 'DATA_DIRECTORY' path in the script.")
+        return
+    except ValueError as e:
+        print(f"Error processing data: {e}")
+        return
+
+    # Merge on Date (inner join keeps only dates where both assets have data)
+    combined = pd.merge(gold_df, btc_df, on="Date", how="inner", suffixes=("_GOLD", "_BTC"))
+
+    # Calculate daily % change 
+    combined["GOLD_Change"] = combined["Close_GOLD"].pct_change() * 100
+    combined["BTC_Change"]  = combined["Close_BTC"].pct_change() * 100
+
+    # Drop first row (which will contain NaN due to pct_change calculation)
+    combined = combined.dropna(subset=["GOLD_Change", "BTC_Change"])
+    
+    # Filter for the last 10 years of available common data
+    start_date = combined["Date"].max() - pd.DateOffset(years=10)
+    combined = combined[combined["Date"] >= start_date]
+
+    if combined.empty:
+        print("ERROR: No overlapping data found after filtering for the last 10 years.")
+        return
+
+    # Plot daily percentage change
+    plt.style.use('default') 
+    fig, ax = plt.subplots(figsize=(14, 7))
+    
+    # --- Visualization Parameters ---
+    BTC_COLOR = "#003366"  # Deep Navy Blue
+    GOLD_COLOR = "#CC8400" # Deeper Golden Orange
+    LINE_WIDTH = 1.5      
+    
+    # 1. Plot Bitcoin first (as transparent background context/noise)
+    ax.plot(combined["Date"], combined["BTC_Change"], 
+              label="Bitcoin Daily % Change", 
+              color=BTC_COLOR, 
+              linewidth=LINE_WIDTH,
+              alpha=0.5,     
+              zorder=5)      
+    
+    # 2. Plot Gold second (as fully opaque foreground focus)
+    ax.plot(combined["Date"], combined["GOLD_Change"], 
+              label="Gold Futures Daily % Change", 
+              color=GOLD_COLOR, 
+              linewidth=LINE_WIDTH, 
+              alpha=1.0,     
+              zorder=10)     
+    
+    # Add key horizontal line at 0%
+    ax.axhline(0, color='darkgray', linestyle='-', linewidth=1.5, zorder=1) 
+    
+    # Set labels and title
+    ax.set_xlabel("Date", fontsize=12)
+    ax.set_ylabel("Daily % Change", fontsize=12)
+    ax.set_title("BTC Vs Gold Daily Changes", fontsize=16, fontweight='bold')
+    
+    ax.legend(loc='upper left', fontsize=10)
+    plt.tight_layout()
+    plt.show()
+    
+    print("\n--- Plotting Complete ---")
+    print(f"Analysis covers {len(combined)} overlapping trading days.")
+    print(f"Date Range: {combined['Date'].min().strftime('%Y-%m-%d')} to {combined['Date'].max().strftime('%Y-%m-%d')}")
+
+if __name__ == "__main__":
+    plot_daily_change()
