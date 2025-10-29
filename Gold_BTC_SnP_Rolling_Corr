@@ -1,0 +1,169 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from pathlib import Path
+
+# --- Configuration: File Names and Analysis Parameters ---
+# NOTE: Update this absolute path to where your data files are stored.
+DATA_DIRECTORY = Path("C:/Users/peter_bkbowcp/OneDrive/Desktop/Dashboard Project")
+
+# File paths for the three assets
+GOLD_FILE = DATA_DIRECTORY / "Gold Futures Historical Data.csv"
+BTC_FILE  = DATA_DIRECTORY / "Bitcoin Historical Data.csv"
+SP_FILE   = DATA_DIRECTORY / "S&P Historical Data.csv" 
+
+# The number of trading days to use for the correlation calculation (e.g., 60 days = ~3 months)
+ROLLING_WINDOW = 60 
+
+CLOSE_CANDIDATES = ["Close", "Adj Close", "Close*", "Price", "Last", "Close/Last"]
+
+# --- Visualization Colors (Based on previous plots) ---
+# BTC Color: Deep Navy Blue
+BTC_CORR_COLOR = "#003366" 
+# Gold Color: Deeper Golden Orange
+GOLD_CORR_COLOR = "#CC8400" 
+
+# --- Helper functions (Reused for Robust Data Cleaning) ---
+
+def clean_numeric_series(s):
+    """
+    Cleans a pandas Series by removing common non-numeric characters and converts it to float.
+    """
+    return (s.astype(str)
+              .str.replace('"', '', regex=False)
+              .str.replace("'", "", regex=False)
+              .str.replace(",", "", regex=False)
+              .str.strip()
+              .replace("", pd.NA)
+              .astype(float)
+            )
+
+def load_and_clean(filepath, ticker_label):
+    """
+    Loads a CSV file, identifies Date and a Close price column, cleans the data,
+    and returns a DataFrame with 'Date' and cleaned 'Close' prices.
+    """
+    if not Path(filepath).exists():
+        raise FileNotFoundError(f"File not found: {filepath.name}. Checked location: {filepath.parent}")
+    
+    df = pd.read_csv(filepath, skip_blank_lines=True)
+    df.columns = [c.strip() for c in df.columns]
+
+    date_col = next((c for c in df.columns if c.strip().lower() in ["date", "day", "time"]), None)
+    if date_col is None:
+        raise ValueError(f"No 'Date' column found in {filepath.name}")
+    df["Date"] = pd.to_datetime(df[date_col].astype(str).str.replace('"', '').str.strip(), errors='coerce')
+    df = df.rename(columns={date_col: "Date"})
+
+    close_col = next((c for c in df.columns for cand in CLOSE_CANDIDATES if c.strip().lower() == cand.strip().lower()), None)
+    if close_col is None:
+        numeric_cols = [c for c in df.columns if c != "Date" and df[c].astype(str).str.contains(r'[\d]').any()]
+        close_col = numeric_cols[0] if numeric_cols else None
+        
+    if close_col is None:
+        raise ValueError(f"No valid price column found in {filepath.name}")
+    
+    df["Close"] = clean_numeric_series(df[close_col])
+    df = df[["Date", "Close"]].dropna(subset=["Date", "Close"]).sort_values("Date").reset_index(drop=True)
+    
+    # Add a suffix to the Close column for easy merging
+    df = df.rename(columns={"Close": f"Close_{ticker_label}"})
+    return df
+
+# --- Main analysis and plotting function ---
+def plot_combined_correlation():
+    """
+    Loads Gold, BTC, and S&P 500 data, calculates daily percentage change, and plots 
+    the 60-day rolling correlation for Gold vs. BTC and Gold vs. S&P on the same graph.
+    """
+    try:
+        # Load data for all three assets
+        gold_df = load_and_clean(GOLD_FILE, "GOLD")
+        btc_df  = load_and_clean(BTC_FILE, "BTC")
+        sp_df   = load_and_clean(SP_FILE, "SP")
+    except (FileNotFoundError, ValueError) as e:
+        print(f"FATAL ERROR: {e}")
+        print("\nACTION REQUIRED: Please ensure your data files exist and the 'DATA_DIRECTORY' path is correct.")
+        return
+
+    # 1. Prepare Data & Filter 10 Years
+    # Merge all three on Date (inner join keeps only dates where all three have data)
+    combined = pd.merge(gold_df, btc_df, on="Date", how="inner")
+    combined = pd.merge(combined, sp_df, on="Date", how="inner")
+    
+    # Calculate daily % change for all three
+    combined["GOLD_Change"] = combined["Close_GOLD"].pct_change()
+    combined["BTC_Change"]  = combined["Close_BTC"].pct_change()
+    combined["SP_Change"]   = combined["Close_SP"].pct_change()
+    
+    combined = combined.dropna(subset=["GOLD_Change", "BTC_Change", "SP_Change"])
+    
+    # Filter for the last 10 years of available common data
+    start_date = combined["Date"].max() - pd.DateOffset(years=10)
+    combined = combined[combined["Date"] >= start_date]
+
+    if combined.empty:
+        print("ERROR: No overlapping data found after filtering for the last 10 years.")
+        return
+
+    # 2. Calculate Rolling Correlations
+    # Gold vs. Bitcoin (BTC)
+    corr_gold_btc = combined["GOLD_Change"].rolling(window=ROLLING_WINDOW).corr(combined["BTC_Change"])
+    # Gold vs. S&P 500 (SP)
+    corr_gold_sp = combined["GOLD_Change"].rolling(window=ROLLING_WINDOW).corr(combined["SP_Change"])
+    
+    # 3. Setup Plot
+    plt.style.use('default') 
+    fig, ax = plt.subplots(figsize=(16, 8))
+    
+    # Explicitly disable gridlines
+    ax.grid(False)
+    
+    # 4. Plotting the Correlation Series
+    
+    # Plot 1: Gold vs. BTC (using BTC's color)
+    ax.plot(combined["Date"], corr_gold_btc, 
+              label=f"{ROLLING_WINDOW}-Day Rolling Correlation (Gold vs. BTC)", 
+              color=BTC_CORR_COLOR, 
+              linewidth=2.5,
+              zorder=5)
+
+    # Plot 2: Gold vs. S&P 500 (using Gold's color)
+    ax.plot(combined["Date"], corr_gold_sp, 
+              label=f"{ROLLING_WINDOW}-Day Rolling Correlation (Gold vs. S&P 500)", 
+              color=GOLD_CORR_COLOR, 
+              linewidth=2.5,
+              zorder=6) # Set higher zorder to ensure visibility
+    
+    # 5. Add Reference Lines 
+    
+    # Zero Correlation (Crucial Reference)
+    ax.axhline(0.0, color='black', linestyle='-', linewidth=1.5, alpha=0.8, zorder=1)
+    
+    # 6. Final Touches
+    
+    # Set Y-axis bounds to the theoretical max/min for correlation
+    ax.set_ylim(-1.0, 1.0)
+    
+    # Format X-axis to show years only
+    years = mdates.YearLocator()
+    years_fmt = mdates.DateFormatter('%Y')
+    ax.xaxis.set_major_locator(years)
+    ax.xaxis.set_major_formatter(years_fmt)
+    plt.xticks(rotation=0) 
+    
+    ax.set_xlabel("Date", fontsize=12)
+    ax.set_ylabel("Correlation Coefficient (ρ)", fontsize=12, fontweight='bold')
+    ax.set_title(f"Gold and BTC {ROLLING_WINDOW}-Day Rolling Correlations with S&P 500", 
+                  fontsize=18, fontweight='bold', pad=20)
+    
+    ax.legend(loc='lower left', fontsize=11, frameon=True, shadow=True)
+    plt.tight_layout()
+    plt.show()
+    
+    print("\n--- Plotting Combined Rolling Correlations Complete ---")
+    print(f"Rolling Window Size: {ROLLING_WINDOW} days")
+    print(f"Date Range: {combined['Date'].min().strftime('%Y-%m-%d')} to {combined['Date'].max().strftime('%Y-%m-%d')}")
+    
+if __name__ == "__main__":
+    plot_combined_correlation()
