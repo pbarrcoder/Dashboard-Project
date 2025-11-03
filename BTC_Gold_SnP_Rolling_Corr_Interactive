@@ -1,0 +1,312 @@
+"""
+Smooth live slider for rolling correlation (Matplotlib, no browser).
+
+What this version changes:
+- Slider is LIVE: moving it updates the plot immediately.
+- Smooth & low-latency updates by:
+    1) computing rolling correlations from precomputed cumulative sums (O(1) per window, vectorized),
+    2) using Matplotlib blitting to redraw only the changed lines (very fast).
+- Removes Apply button; slider is the only control (with +/- nudge buttons).
+- Keeps all original cleaning & merging logic.
+
+Paste over your script and run. Requires: pandas, numpy, matplotlib.
+"""
+
+from pathlib import Path
+import sys
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from matplotlib.widgets import Slider, Button
+
+# --- Configuration (update as needed) ---
+DATA_DIRECTORY = Path("C:/Users/peter_bkbowcp/OneDrive/Desktop/Dashboard Project")
+BTC_FILE = DATA_DIRECTORY / "Bitcoin Historical Data.csv"
+SP_FILE = DATA_DIRECTORY / "S&P Historical Data.csv"
+GOLD_FILE = DATA_DIRECTORY / "Gold Futures Historical Data.csv"
+
+INIT_WINDOW = 60
+MIN_WINDOW = 5
+MAX_WINDOW = 500  # effective max - will be clamped to data length
+LOOKBACK_YEARS = 10
+
+CLOSE_CANDIDATES = ["Close", "Adj Close", "Close*", "Price", "Last", "Close/Last"]
+# ------------------------------------------------
+
+def clean_numeric_series(s: pd.Series) -> pd.Series:
+    return (
+        s.astype(str)
+         .str.replace('"', '', regex=False)
+         .str.replace("'", "", regex=False)
+         .str.replace(",", "", regex=False)
+         .str.replace("$", "", regex=False)
+         .str.replace("%", "", regex=False)
+         .str.strip()
+         .replace("", pd.NA)
+         .astype(float)
+    )
+
+def load_and_clean(filepath: Path, ticker_label: str) -> pd.DataFrame:
+    if not filepath.exists():
+        raise FileNotFoundError(f"File not found: {filepath} (checked {filepath.resolve()})")
+    df = pd.read_csv(filepath, skip_blank_lines=True)
+    df.columns = [c.strip() for c in df.columns]
+
+    date_col = next((c for c in df.columns if c.strip().lower() in ("date", "day", "time")), None)
+    if date_col is None:
+        date_col = next((c for c in df.columns if "date" in c.lower()), None)
+    if date_col is None:
+        raise ValueError(f"No date column found in {filepath.name}")
+
+    df["Date"] = pd.to_datetime(df[date_col].astype(str).str.replace('"','').str.strip(), errors='coerce')
+    df = df.rename(columns={date_col: "Date"})
+
+    close_col = None
+    for c in df.columns:
+        for cand in CLOSE_CANDIDATES:
+            if c.strip().lower() == cand.strip().lower():
+                close_col = c
+                break
+        if close_col:
+            break
+
+    if close_col is None:
+        numeric_cols = [c for c in df.columns if c != "Date" and df[c].astype(str).str.contains(r'[\d]').any()]
+        close_col = numeric_cols[0] if numeric_cols else None
+    if close_col is None:
+        raise ValueError(f"No price-like column found in {filepath.name}")
+
+    df["Close"] = clean_numeric_series(df[close_col])
+    df = df[["Date", "Close"]].dropna(subset=["Date", "Close"]).sort_values("Date").reset_index(drop=True)
+    df = df.rename(columns={"Close": f"Close_{ticker_label}"})
+    return df
+
+def prepare_data():
+    try:
+        btc = load_and_clean(BTC_FILE, "BTC")
+        sp  = load_and_clean(SP_FILE, "SP")
+        gold = load_and_clean(GOLD_FILE, "GOLD")
+    except Exception as e:
+        print("ERROR loading files:", e)
+        sys.exit(1)
+
+    combined = sp.merge(btc, on="Date", how="inner").merge(gold, on="Date", how="inner")
+    if combined.empty:
+        print("No overlapping dates across files. Exiting.")
+        sys.exit(1)
+
+    combined = combined.sort_values("Date").reset_index(drop=True)
+    combined["SP_Change"]   = combined["Close_SP"].pct_change()
+    combined["BTC_Change"]  = combined["Close_BTC"].pct_change()
+    combined["GOLD_Change"] = combined["Close_GOLD"].pct_change()
+    combined = combined.dropna(subset=["SP_Change", "BTC_Change", "GOLD_Change"]).reset_index(drop=True)
+
+    if combined.empty:
+        print("Not enough data after computing percent changes. Exiting.")
+        sys.exit(1)
+
+    # optional lookback
+    try:
+        last = combined["Date"].max()
+        start = last - pd.DateOffset(years=LOOKBACK_YEARS)
+        combined = combined[combined["Date"] >= start].reset_index(drop=True)
+    except Exception:
+        pass
+
+    return combined
+
+# ---------- Efficient rolling correlation via cumulative sums ----------
+def precompute_cumsums(x: np.ndarray, y: np.ndarray):
+    """
+    Precompute cumulative sums needed to compute rolling correlation for any window:
+    cX, cY, cXY, cX2, cY2 are length n+1 with leading 0 to make window sums easy.
+    """
+    # ensure 1D float arrays
+    x = x.astype(float)
+    y = y.astype(float)
+    xy = x * y
+    x2 = x * x
+    y2 = y * y
+
+    cX  = np.concatenate(([0.0], np.cumsum(x)))
+    cY  = np.concatenate(([0.0], np.cumsum(y)))
+    cXY = np.concatenate(([0.0], np.cumsum(xy)))
+    cX2 = np.concatenate(([0.0], np.cumsum(x2)))
+    cY2 = np.concatenate(([0.0], np.cumsum(y2)))
+
+    return cX, cY, cXY, cX2, cY2
+
+def rolling_corr_from_cumsums(cX, cY, cXY, cX2, cY2, window):
+    """
+    Vectorized rolling correlation using cumulative sums.
+    Returns array length n with NaN for indices < window-1.
+    Uses population formulas (division by window).
+    """
+    n = len(cX) - 1
+    if window <= 1:
+        return np.full(n, np.nan)
+
+    # compute window sums: sum[i] = c[i+1] - c[i+1-window]
+    idx_end = np.arange(window, n+1)           # positions in cumsums that are window ends
+    idx_start = idx_end - window               # start positions
+
+    sum_x = cX[idx_end] - cX[idx_start]
+    sum_y = cY[idx_end] - cY[idx_start]
+    sum_xy = cXY[idx_end] - cXY[idx_start]
+    sum_x2 = cX2[idx_end] - cX2[idx_start]
+    sum_y2 = cY2[idx_end] - cY2[idx_start]
+
+    # means
+    mean_x = sum_x / window
+    mean_y = sum_y / window
+
+    # covariance and variances (population)
+    cov = (sum_xy / window) - (mean_x * mean_y)
+    var_x = (sum_x2 / window) - (mean_x * mean_x)
+    var_y = (sum_y2 / window) - (mean_y * mean_y)
+
+    # numerical safety: var may be slight negative due to precision
+    var_x = np.where(var_x < 0, 0.0, var_x)
+    var_y = np.where(var_y < 0, 0.0, var_y)
+
+    denom = np.sqrt(var_x * var_y)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        rho = cov / denom
+
+    # pre-pad with NaNs for indices < window-1
+    result = np.full(n, np.nan)
+    result[window-1:] = rho
+    return result
+
+# ---------- Plot & interactive components ----------
+def plot_with_live_slider():
+    combined = prepare_data()
+    dates = combined["Date"]
+    n = len(combined)
+
+    # limit max window to data length
+    max_window = min(MAX_WINDOW, n // 2 if n//2 > 2 else n)  # reasonable cap
+    init_w = min(INIT_WINDOW, max_window)
+    min_w = max(MIN_WINDOW, 2)
+
+    # arrays for correlation computation
+    btc = combined["BTC_Change"].to_numpy()
+    sp  = combined["SP_Change"].to_numpy()
+    gold = combined["GOLD_Change"].to_numpy()
+
+    # precompute cumsums for both pairs BTC-SP and GOLD-SP
+    cX_btc, cY_sp_b, cXY_btc_sp, cX2_btc, cY2_sp_b = precompute_cumsums(btc, sp)
+    cX_gold, cY_sp_g, cXY_gold_sp, cX2_gold, cY2_sp_g = precompute_cumsums(gold, sp)
+
+    # initial rolling (fast)
+    rho_btc = rolling_corr_from_cumsums(cX_btc, cY_sp_b, cXY_btc_sp, cX2_btc, cY2_sp_b, init_w)
+    rho_gold = rolling_corr_from_cumsums(cX_gold, cY_sp_g, cXY_gold_sp, cX2_gold, cY2_sp_g, init_w)
+
+    plt.style.use('default')
+    fig, ax = plt.subplots(figsize=(14,7))
+    plt.subplots_adjust(bottom=0.18)  # space for controls
+
+    BTC_COLOR = "#003366"
+    GOLD_COLOR = "#b58900"
+
+    # initial lines
+    line_btc, = ax.plot(dates, rho_btc, label=f"{init_w}-Day BTC vs S&P", color=BTC_COLOR, linewidth=2.5)
+    line_gold, = ax.plot(dates, rho_gold, label=f"{init_w}-Day Gold vs S&P", color=GOLD_COLOR, linewidth=2.5)
+
+    ax.axhline(0.0, color='black', linewidth=1)
+    ax.set_ylim(-1.0, 1.0)
+    ax.set_xlim(dates.min(), dates.max())
+
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Correlation (ρ)")
+    ax.set_title(f"{init_w}-Day Rolling Correlations — BTC & Gold vs S&P 500", fontsize=14, fontweight='bold')
+    ax.legend(loc='lower left')
+
+    ax.xaxis.set_major_locator(mdates.YearLocator())
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    plt.setp(ax.get_xticklabels(), rotation=0)
+
+    # Slider axis and +/- buttons
+    slider_ax = fig.add_axes([0.17, 0.07, 0.62, 0.04], facecolor='#f5f5f5')
+    slider = Slider(slider_ax, 'Window', valmin=min_w, valmax=max_window, valinit=init_w, valstep=1)
+
+    btn_minus_ax = fig.add_axes([0.03, 0.07, 0.06, 0.04])
+    btn_plus_ax  = fig.add_axes([0.81, 0.07, 0.06, 0.04])
+    btn_minus = Button(btn_minus_ax, '−')
+    btn_plus  = Button(btn_plus_ax,  '+')
+
+    # display the current integer value (big & clear)
+    val_ax = fig.add_axes([0.88, 0.07, 0.09, 0.04])
+    val_ax.axis('off')
+    val_text = val_ax.text(0.5, 0.5, f"{init_w}", ha='center', va='center', fontsize=12, fontweight='bold')
+
+    # Prepare blitting: draw once, capture background
+    fig.canvas.draw()                       # initial draw (required)
+    background = fig.canvas.copy_from_bbox(fig.bbox)   # full background (including axes, labels)
+    # draw artists once onto the GUI
+    ax.draw_artist(line_btc)
+    ax.draw_artist(line_gold)
+    fig.canvas.blit(fig.bbox)
+
+    # Update function: compute new rolling (using cumsums) and blit artist updates
+    def update_live(window):
+        w = int(window)
+        # clamp
+        if w < 2:
+            return
+        # fast compute new arrays
+        new_btc = rolling_corr_from_cumsums(cX_btc, cY_sp_b, cXY_btc_sp, cX2_btc, cY2_sp_b, w)
+        new_gold = rolling_corr_from_cumsums(cX_gold, cY_sp_g, cXY_gold_sp, cX2_gold, cY2_sp_g, w)
+
+        # set data
+        line_btc.set_ydata(new_btc)
+        line_gold.set_ydata(new_gold)
+
+        # update title/legend/value display
+        ax.set_title(f"{w}-Day Rolling Correlations — BTC & Gold vs S&P 500", fontsize=14, fontweight='bold')
+        line_btc.set_label(f"{w}-Day BTC vs S&P")
+        line_gold.set_label(f"{w}-Day Gold vs S&P")
+        ax.legend(loc='lower left')
+
+        val_text.set_text(f"{w}")
+
+        # fast redraw via blit
+        fig.canvas.restore_region(background)      # restore background
+        ax.draw_artist(line_btc)                   # draw artists
+        ax.draw_artist(line_gold)
+        fig.canvas.blit(fig.bbox)                  # blit to screen
+
+    # Slider callback (live)
+    def slider_on_changed(val):
+        # val comes in as float; convert to int
+        update_live(int(val))
+
+    slider.on_changed(slider_on_changed)
+
+    # +/- button callbacks
+    def inc(event):
+        newval = min(int(slider.val) + 1, int(max_window))
+        slider.set_val(newval)
+    def dec(event):
+        newval = max(int(slider.val) - 1, int(min_w))
+        slider.set_val(newval)
+    btn_plus.on_clicked(inc)
+    btn_minus.on_clicked(dec)
+
+    # Keybinding: press 's' to save snapshot
+    def on_key(event):
+        if event.key == 's':
+            out = DATA_DIRECTORY / f"rolling_corr_snapshot_{int(slider.val)}d.png"
+            try:
+                fig.savefig(out, dpi=150, bbox_inches='tight')
+                print(f"Saved snapshot to: {out}")
+            except Exception as e:
+                print("Save failed:", e)
+    fig.canvas.mpl_connect('key_press_event', on_key)
+
+    print("Live slider ready. Drag slider (or use +/-). Press 's' to save a PNG snapshot.")
+    plt.show()
+
+if __name__ == "__main__":
+    plot_with_live_slider()
