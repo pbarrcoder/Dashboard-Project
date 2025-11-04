@@ -1,1 +1,413 @@
 http://127.0.0.1:8050/
+
+import sys
+import numpy as np
+import pandas as pd
+from pathlib import Path
+import math
+import dash.exceptions
+
+# --- New Imports for Dash ---
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import dash
+from dash import dcc, html, ctx
+from dash.dependencies import Input, Output, State
+
+# --- Configuration (update as needed) ---
+# --- IMPORTANT: Place your CSV files in the SAME FOLDER as this app.py file ---
+DATA_DIRECTORY = Path(__file__).parent # This means the folder where app.py is saved
+BTC_FILE = DATA_DIRECTORY / "Bitcoin Historical Data.csv"
+SP_FILE = DATA_DIRECTORY / "S&P Historical Data.csv"
+GOLD_FILE = DATA_DIRECTORY / "Gold Futures Historical Data.csv"
+
+# --- Config for Graph 1 (Growth) ---
+START_DATE = '2011-01-01'
+# STEP_SIZE = 50 # (Removed for static version)
+
+# --- Config for Graph 2 (Correlation) ---
+INIT_WINDOW = 60
+MIN_WINDOW = 5
+MAX_WINDOW = 500  # effective max - will be clamped to data length
+LOOKBACK_YEARS = 10
+
+CLOSE_CANDIDATES = ["Close", "Adj Close", "Close*", "Price", "Last", "Close/Last"]
+# ------------------------------------------------
+
+# --- Helper function (used by both) ---
+def clean_numeric_series(s: pd.Series) -> pd.Series:
+    return (
+        s.astype(str)
+         .str.replace('"', '', regex=False)
+         .str.replace("'", "", regex=False)
+         .str.replace(",", "", regex=False)
+         .str.replace("$", "", regex=False)
+         .str.replace("%", "", regex=False)
+         .str.strip()
+         .replace("", pd.NA)
+         .astype(float)
+    )
+
+# --- Graph 1 (Growth) Data Functions ---
+
+def load_and_clean_for_growth(filename, asset_name):
+    """Loads a CSV for the growth chart, sets Date as index, and filters by START_DATE."""
+    if not filename.exists():
+        raise FileNotFoundError(
+            f"ERROR: File not found: '{filename}'. "
+            f"Please ensure the path and filename is correct."
+        )
+
+    df = pd.read_csv(filename, skip_blank_lines=True)
+    df.columns = [c.strip() for c in df.columns]
+
+    date_col = next((c for c in df.columns if c.strip().lower() in ["date", "day", "time"]), None)
+    if date_col is None:
+        raise ValueError(f"No 'Date' column found in {filename}")
+        
+    close_col = next(
+        (c for c in df.columns for cand in CLOSE_CANDIDATES if c.strip().lower() == cand.strip().lower()), 
+        None
+    )
+    if close_col is None:
+        raise ValueError(f"No closing price column found (e.g., Close, Price) in {filename}")
+        
+    df["Date"] = pd.to_datetime(
+        df[date_col].astype(str).str.replace('"', '').str.strip(), 
+        errors='coerce'
+    )
+
+    df["Close"] = clean_numeric_series(df[close_col])
+    
+    df = df[["Date", "Close"]].dropna(subset=["Date", "Close"]).sort_values("Date")
+    df = df.set_index("Date") # Set Date as index
+    df = df[df.index >= START_DATE] # Filter by start date
+    
+    return df.rename(columns={'Close': f'Close_{asset_name}'})
+
+def prepare_growth_data():
+    """Prepares the merged Gold/BTC dataframe for the growth chart."""
+    try:
+        gold_df = load_and_clean_for_growth(GOLD_FILE, 'Gold')
+        btc_df  = load_and_clean_for_growth(BTC_FILE, 'BTC')
+    except Exception as e:
+        print(f"ERROR loading files for growth chart: {e}")
+        return pd.DataFrame() # Return empty
+
+    # Merge
+    combined = pd.merge(gold_df[[f'Close_Gold']], 
+                        btc_df[[f'Close_BTC']], 
+                        left_index=True, right_index=True, how="inner").dropna()
+    
+    if combined.empty:
+        print(f"ERROR: No common dates found for growth chart after {START_DATE}.")
+        # --- FIX: Stop the app if data is empty ---
+        sys.exit("Exiting: Growth data is empty. Check your CSV files and START_DATE.")
+    
+    return combined
+
+# --- Graph 2 (Correlation) Data Functions ---
+
+def load_and_clean_for_corr(filepath: Path, ticker_label: str) -> pd.DataFrame:
+    """Loads a CSV for the correlation chart, keeping 'Date' as a column."""
+    if not filepath.exists():
+        raise FileNotFoundError(f"File not found: {filepath} (checked {filepath.resolve()})")
+    df = pd.read_csv(filepath, skip_blank_lines=True)
+    df.columns = [c.strip() for c in df.columns]
+
+    date_col = next((c for c in df.columns if c.strip().lower() in ("date", "day", "time")), None)
+    if date_col is None:
+        date_col = next((c for c in df.columns if "date" in c.lower()), None)
+    if date_col is None:
+        raise ValueError(f"No date column found in {filepath.name}")
+
+    df["Date"] = pd.to_datetime(df[date_col].astype(str).str.replace('"','').str.strip(), errors='coerce')
+    df = df.rename(columns={date_col: "Date"})
+
+    close_col = None
+    for c in df.columns:
+        for cand in CLOSE_CANDIDATES:
+            if c.strip().lower() == cand.strip().lower():
+                close_col = c
+                break
+        if close_col:
+            break
+    if close_col is None:
+        raise ValueError(f"No price-like column found in {filepath.name}")
+
+    df["Close"] = clean_numeric_series(df[close_col])
+    df = df[["Date", "Close"]].dropna(subset=["Date", "Close"]).sort_values("Date").reset_index(drop=True)
+    return df.rename(columns={"Close": f"Close_{ticker_label}"})
+
+def prepare_correlation_data():
+    """Prepares the merged S&P/BTC/Gold dataframe for the correlation chart."""
+    try:
+        btc = load_and_clean_for_corr(BTC_FILE, "BTC")
+        sp  = load_and_clean_for_corr(SP_FILE, "SP")
+        gold = load_and_clean_for_corr(GOLD_FILE, "GOLD")
+    except Exception as e:
+        print(f"ERROR loading files: {e}")
+        sys.exit(1)
+
+    combined = sp.merge(btc, on="Date", how="inner").merge(gold, on="Date", how="inner")
+    if combined.empty:
+        print("No overlapping dates across files. Exiting.")
+        sys.exit(1)
+
+    # --- THIS IS THE FIX ---
+    combined = combined.sort_values("Date").reset_index(drop=True)
+    # --- END OF FIX ---
+    
+    combined["SP_Change"]   = combined["Close_SP"].pct_change()
+    combined["BTC_Change"]  = combined["Close_BTC"].pct_change()
+    combined["GOLD_Change"] = combined["Close_GOLD"].pct_change()
+    combined = combined.dropna(subset=["SP_Change", "BTC_Change", "GOLD_Change"]).reset_index(drop=True)
+
+    if combined.empty:
+        print("Not enough data after computing percent changes. Exiting.")
+        sys.exit(1)
+
+    try:
+        last = combined["Date"].max()
+        start = last - pd.DateOffset(years=LOOKBACK_YEARS)
+        combined = combined[combined["Date"] >= start].reset_index(drop=True)
+    except Exception:
+        pass
+
+    return combined
+
+def precompute_cumsums(x: np.ndarray, y: np.ndarray):
+    x = x.astype(float)
+    y = y.astype(float)
+    xy = x * y
+    x2 = x * x
+    y2 = y * y
+    cX  = np.concatenate(([0.0], np.cumsum(x)))
+    cY  = np.concatenate(([0.0], np.cumsum(y)))
+    cXY = np.concatenate(([0.0], np.cumsum(xy)))
+    cX2 = np.concatenate(([0.0], np.cumsum(x2)))
+    cY2 = np.concatenate(([0.0], np.cumsum(y2)))
+    return cX, cY, cXY, cX2, cY2
+
+def rolling_corr_from_cumsums(cX, cY, cXY, cX2, cY2, window):
+    n = len(cX) - 1
+    if window <= 1:
+        return np.full(n, np.nan)
+    idx_end = np.arange(window, n+1)
+    idx_start = idx_end - window
+    sum_x = cX[idx_end] - cX[idx_start]
+    sum_y = cY[idx_end] - cY[idx_start]
+    sum_xy = cXY[idx_end] - cXY[idx_start]
+    sum_x2 = cX2[idx_end] - cX2[idx_start]
+    sum_y2 = cY2[idx_end] - cY2[idx_start]
+    mean_x = sum_x / window
+    mean_y = sum_y / window
+    cov = (sum_xy / window) - (mean_x * mean_y)
+    var_x = (sum_x2 / window) - (mean_x * mean_x)
+    var_y = (sum_y2 / window) - (mean_y * mean_y)
+    var_x = np.where(var_x < 0, 0.0, var_x)
+    var_y = np.where(var_y < 0, 0.0, var_y)
+    denom = np.sqrt(var_x * var_y)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        rho = cov / denom
+    result = np.full(n, np.nan)
+    result[window-1:] = rho
+    return result
+
+# --- Pre-load Data (Done once at startup) ---
+print("Loading and preparing data for Growth Chart...")
+growth_data = prepare_growth_data()
+# growth_data_length = len(growth_data) # (Removed for static version)
+print("Loading and preparing data for Correlation Chart...")
+correlation_data = prepare_correlation_data()
+
+# --- Setup for Correlation Chart ---
+corr_dates = correlation_data["Date"]
+n_data_points = len(correlation_data)
+max_window_actual = min(MAX_WINDOW, n_data_points // 2 if n_data_points//2 > 2 else n_data_points)
+init_w_actual = min(INIT_WINDOW, max_window_actual)
+min_w_actual = max(MIN_WINDOW, 2)
+btc_corr = correlation_data["BTC_Change"].to_numpy()
+sp_corr  = correlation_data["SP_Change"].to_numpy()
+gold_corr = correlation_data["GOLD_Change"].to_numpy()
+print("Precomputing cumulative sums...")
+cX_btc, cY_sp_b, cXY_btc_sp, cX2_btc, cY2_sp_b = precompute_cumsums(btc_corr, sp_corr)
+cX_gold, cY_sp_g, cXY_gold_sp, cX2_gold, cY2_sp_g = precompute_cumsums(gold_corr, sp_corr)
+print("Data ready.")
+
+# --- Dash Application ---
+# --- RENAMED VARIABLE ---
+dashboard = dash.Dash(__name__)
+
+# --- App Layout ---
+# --- UPDATED TO USE 'dashboard.layout' ---
+dashboard.layout = html.Div(style={'fontFamily': 'Inter, sans-serif', 'padding': '20px', 'backgroundColor': '#f9fafb'}, children=[
+    
+    html.H1("Asset Dashboard", style={'textAlign': 'center', 'color': '#111827'}),
+
+    # --- Card for Graph 1 (Growth) ---
+    html.Div(style={'maxWidth': '1000px', 'margin': '20px auto', 'padding': '20px', 'boxShadow': '0 4px 8px rgba(0,0,0,0.1)', 'borderRadius': '8px', 'backgroundColor': 'white'}, children=[
+        
+        html.H2("Gold vs. Bitcoin Growth", style={'textAlign': 'center', 'color': '#374151'}),
+        
+        dcc.Graph(id='growth-graph'),
+        
+        # --- Storage and Interval removed ---
+        
+        html.Div(style={'textAlign': 'center', 'marginTop': '10px'}, children=[
+             dcc.RadioItems(
+                 id='scale-toggle',
+                 options=[
+                     {'label': 'Log Scale', 'value': 'log'},
+                     {'label': 'Linear Scale', 'value': 'linear'}
+                 ],
+                 value='log', # Default to Log scale
+                 labelStyle={'display': 'inline-block', 'padding': '10px', 'cursor': 'pointer'},
+                 style={'textAlign': 'center'}
+             ),
+            
+            # --- Animation Button removed ---
+        ])
+    ]),
+    
+    # --- Card for Graph 2 (Correlation) ---
+    html.Div(style={'maxWidth': '1000px', 'margin': '40px auto 20px auto', 'padding': '20px', 'boxShadow': '0 4px 8px rgba(0,0,0,0.1)', 'borderRadius': '8px', 'backgroundColor': 'white'}, children=[
+        
+        html.H2("Rolling Correlations vs. S&P 500", style={'textAlign': 'center', 'color': '#374151'}),
+        
+        dcc.Graph(id='correlation-graph'),
+        
+        html.Label("Select Rolling Window (Days):", style={'fontSize': 18, 'fontWeight': 'bold', 'color': '#1f2937', 'display': 'block', 'marginTop': '10px'}),
+        
+        dcc.Slider(
+            id='window-slider',
+            min=min_w_actual,
+            max=max_window_actual,
+            value=init_w_actual,
+            step=1,
+            marks={i: str(i) for i in range(min_w_actual, max_window_actual + 1, 50)},
+            tooltip={"placement": "bottom", "always_visible": True}
+        ),
+        
+        html.Div(id='slider-output-display', style={'textAlign': 'center', 'fontSize': 20, 'marginTop': '20px', 'fontWeight': 'bold', 'color': '#1f2937'})
+    ])
+])
+
+
+# --- UPDATED (Reverted) Callback for Graph 1 (Growth) ---
+# --- UPDATED TO USE '@dashboard.callback' ---
+@dashboard.callback(
+    Output('growth-graph', 'figure'),
+    Input('scale-toggle', 'value')
+)
+def update_growth_graph(scale_value):
+    # Create figure with secondary y-axis
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    
+    GOLD_COLOR = "#E69F00"
+    BTC_COLOR = "#003366"
+    
+    # Add Gold trace (using full growth_data)
+    fig.add_trace(
+        go.Scatter(
+            x=growth_data.index, 
+            y=growth_data['Close_Gold'], 
+            name="Gold Price (USD per oz)",
+            line=dict(color=GOLD_COLOR, width=2.5)
+        ),
+        secondary_y=False,
+    )
+    
+    # Add BTC trace (using full growth_data)
+    fig.add_trace(
+        go.Scatter(
+            x=growth_data.index, 
+            y=growth_data['Close_BTC'], 
+            name="Bitcoin Price (USD per BTC)",
+            line=dict(color=BTC_COLOR, width=2.5)
+        ),
+        secondary_y=True,
+    )
+
+    # Set y-axes titles
+    fig.update_yaxes(
+        title_text="<b>Gold Price</b> (USD per oz)", 
+        secondary_y=False, 
+        type=scale_value, 
+        color=GOLD_COLOR,
+        gridcolor='#eeeeee'
+    )
+    fig.update_yaxes(
+        title_text="<b>Bitcoin Price</b> (USD per BTC)", 
+        secondary_y=True, 
+        type=scale_value, 
+        color=BTC_COLOR,
+        showgrid=False # Only show grid for one y-axis
+    )
+
+    # Set layout
+    fig.update_layout(
+        title_text=f"Gold Vs Bitcoin Growth ({scale_value.capitalize()} Scale)",
+        title_x=0.5,
+        xaxis_title="Date",
+        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor='rgba(255,255,255,0.7)'),
+        transition_duration=200,
+        paper_bgcolor='white',
+        plot_bgcolor='white'
+    )
+    
+    return fig
+
+# --- Callback for Graph 2 (Correlation) ---
+# --- UPDATED TO USE '@dashboard.callback' ---
+@dashboard.callback(
+    [Output('correlation-graph', 'figure'),
+     Output('slider-output-display', 'children')],
+    [Input('window-slider', 'value')]
+)
+def update_correlation_graph(window_value):
+    w = int(window_value)
+    
+    rho_btc = rolling_corr_from_cumsums(cX_btc, cY_sp_b, cXY_btc_sp, cX2_btc, cY2_sp_b, w)
+    rho_gold = rolling_corr_from_cumsums(cX_gold, cY_sp_g, cXY_gold_sp, cX2_gold, cY2_sp_g, w)
+    
+    fig = go.Figure()
+    
+    BTC_COLOR = "#003366"
+    GOLD_COLOR = "#E69F00"
+    
+    fig.add_trace(go.Scatter(
+        x=corr_dates, 
+        y=rho_btc, 
+        name=f"{w}-Day BTC vs S&P", 
+        line=dict(color=BTC_COLOR, width=2.5)
+    ))
+    
+    fig.add_trace(go.Scatter(
+        x=corr_dates, 
+        y=rho_gold, 
+        name=f"{w}-Day Gold vs S&P", 
+        line=dict(color=GOLD_COLOR, width=2.5)
+    ))
+    
+    fig.add_hline(y=0.0, line_width=1, line_dash="dash", line_color="black")
+    
+    fig.update_layout(
+        title_text=f"{w}-Day Rolling Correlations — BTC & Gold vs S&P 500",
+        title_x=0.5,
+        yaxis_title="Correlation (ρ)",
+        yaxis_range=[-1, 1],
+        xaxis_title="Date",
+        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor='rgba(255,255,255,0.7)'),
+        transition_duration=200,
+        paper_bgcolor='white',
+        plot_bgcolor='white',
+        yaxis_gridcolor='#eeeeee'
+    )
+    
+    return fig, f"Current Window: {w} days"
+
+# --- Run the App ---
+if __name__ == '__main__':
+    # --- UPDATED TO USE 'dashboard.run', NEW PORT, and NEW HOST ---
+    dashboard.run(debug=True, port=9050, host='0.0.0.0')
