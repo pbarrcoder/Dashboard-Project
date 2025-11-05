@@ -1,0 +1,357 @@
+# a4_dashboard.py
+# One-page (A4 portrait) mini dashboard with two graphs:
+# 1) "Gold Vs Bitcoin Growth" (dual y-axes, legend below, Gold=gold, BTC=navy, larger y-axis labels)
+# 2) Rolling correlation (BTC vs S&P) and (Gold vs S&P) with a slider
+#
+# No external CSS (no html.Style); everything inline. Works with Investing.com-style CSVs.
+
+import os
+import numpy as np
+import pandas as pd
+from dash import Dash, html, dcc, Output, Input
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+# ---------- CONFIG ----------
+BASE_PATH = r"c:/Users/peter_bkbowcp/OneDrive/Desktop/Dashboard Project/"
+GOLD_FILE = os.path.join(BASE_PATH, "Gold Futures Historical Data.csv")
+BTC_FILE = os.path.join(BASE_PATH, "Bitcoin Historical Data.csv")
+SP_FILE = os.path.join(BASE_PATH, "S&P 500 Historical Data.csv")
+START_DATE = "2011-01-01"
+ROLL_DAYS = 90  # Default rolling correlation window (days)
+APP_PORT = 8068 # Define port for app
+
+# ---------- Helpers ----------
+def _clean_num(s: pd.Series) -> pd.Series:
+    # Remove quotes/commas/unicode minus; coerce to float
+    return (
+        s.astype(str)
+         .str.replace('"', '', regex=False)
+         .str.replace("'", "", regex=False)
+         .str.replace(",", "", regex=False)
+         .str.replace("\u2212", "-", regex=False)  # unicode minus to hyphen
+         .str.strip()
+         .replace({"": np.nan, "None": np.nan})
+         .astype(float)
+    )
+
+def _find_date_col(df: pd.DataFrame) -> str:
+    for c in df.columns:
+        lc = c.strip().lower()
+        if lc in ("date", "time", "day") or "date" in lc:
+            return c
+    raise ValueError("No date column found.")
+
+def _find_close_col(df: pd.DataFrame) -> str:
+    candidates = ["Close", "Adj Close", "Close*", "Price", "Last", "Close/Last"]
+    for c in df.columns:
+        if c.strip() in candidates or c.strip().lower() in [x.lower() for x in candidates]:
+            return c
+    # Fallback: first numeric-like column that's not the date
+    for c in df.columns:
+        if c.lower() != "date":
+            try:
+                pd.to_numeric(df[c].astype(str).str.replace(",", ""), errors="raise")
+                return c
+            except Exception:
+                pass
+    raise ValueError("No price/close column found.")
+
+def load_series(path: str, label: str) -> pd.DataFrame:
+    if not os.path.exists(path):
+        print(f"WARNING: File not found at {path}. Returning empty DataFrame for {label}.")
+        return pd.DataFrame(columns=[label]).set_index(pd.to_datetime([])) # empty datetime index
+        
+    df = pd.read_csv(path)
+    df.columns = [c.strip() for c in df.columns]
+    dcol = _find_date_col(df)
+    ccol = _find_close_col(df)
+    df["Date"] = pd.to_datetime(df[dcol].astype(str).str.strip(), errors="coerce")
+    df[label] = _clean_num(df[ccol])
+    df = df[["Date", label]].dropna().sort_values("Date")
+    df = df[df["Date"] >= START_DATE].set_index("Date")
+    return df
+
+# ---------- Figures ----------
+def make_price_fig(gold: pd.DataFrame, btc: pd.DataFrame, yaxis_type: str = "Linear") -> go.Figure:
+    joined = gold.join(btc, how="inner").dropna()
+    if joined.empty:
+        return go.Figure().update_layout(title="No overlapping Gold/BTC data")
+        
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(
+        go.Scatter(
+            x=joined.index, y=joined["Gold"],
+            name="Gold (USD/oz)",
+            mode="lines",
+            line=dict(width=2, color="gold"),
+            hovertemplate="<br>".join([
+                "<b>Date: %{x|%b %Y}</b>",
+                "Gold (USD/oz): $%{y:.2f}",
+                "<extra></extra>"
+            ])
+        ),
+        secondary_y=False
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=joined.index, y=joined["BTC"],
+            name="Bitcoin (USD/BTC)",
+            mode="lines",
+            line=dict(width=2, color="navy"),
+            hovertemplate="<br>".join([
+                "<b>Date: %{x|%b %Y}</b>",
+                "Bitcoin (USD/BTC): $%{y:.2f}",
+                "<extra></extra>"
+            ])
+        ),
+        secondary_y=True
+    )
+
+    axis_type_str = "log" if yaxis_type == "Log" else "linear"
+    log_dtick = 1 if axis_type_str == "log" else None
+    show_ticks = True if axis_type_str == "linear" else False
+
+    fig.update_layout(
+        title="Gold Vs Bitcoin Growth",
+        hovermode="x unified",
+        margin=dict(l=40, r=40, t=50, b=80),
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.25,
+            xanchor="left",
+            x=0,
+            font=dict(size=14)
+        ),
+        plot_bgcolor='white',
+    )
+
+    fig.update_xaxes(
+        title_text="Date", 
+        showgrid=False, 
+        linecolor='black', 
+        mirror=True,
+        tickfont=dict(size=12)
+    )
+    fig.update_yaxes(
+        title_text="Gold (USD/oz)", 
+        title_font=dict(size=16), 
+        secondary_y=False, 
+        showgrid=False,
+        linecolor='black',
+        mirror=True,
+        type=axis_type_str,
+        dtick=log_dtick,
+        tickfont=dict(size=12),
+        showticklabels=show_ticks,
+    )
+    fig.update_yaxes(
+        title_text="Bitcoin (USD/BTC)", 
+        title_font=dict(size=16), 
+        secondary_y=True, 
+        showgrid=False,
+        linecolor='black',
+        mirror=True,
+        type=axis_type_str,
+        dtick=log_dtick,
+        tickfont=dict(size=12),
+        showticklabels=show_ticks,
+    )
+    return fig
+
+# --- UPDATED: Correlation Figure Function ---
+def make_corr_fig(gold: pd.DataFrame, btc: pd.DataFrame, sp: pd.DataFrame, window: int) -> go.Figure:
+    # Calculate daily returns for each asset
+    ret_gold = gold['Gold'].pct_change().rename('Gold')
+    ret_btc = btc['BTC'].pct_change().rename('BTC')
+    ret_sp = sp['SP'].pct_change().rename('SP')
+
+    # Join all returns, keeping only dates where all three traded
+    ret = pd.concat([ret_gold, ret_btc, ret_sp], axis=1).dropna()
+    
+    if ret.empty:
+        print("="*50)
+        print("CORRELATION DEBUG: No overlapping data found for Gold, BTC, and S&P after calculating returns.")
+        print(f"Check if '{os.path.basename(SP_FILE)}' exists and has data after {START_DATE}.")
+        print(f"Gold returns (non-NA): {len(ret_gold.dropna())}, BTC returns (non-NA): {len(ret_btc.dropna())}, S&P returns (non-NA): {len(ret_sp.dropna())}")
+        print("="*50)
+        return go.Figure().update_layout(title="No overlapping data for correlations (Check S&P file and dates)")
+
+    # Calculate rolling correlations vs S&P 500
+    corr_gold_sp = ret["Gold"].rolling(window).corr(ret["SP"])
+    corr_btc_sp = ret["BTC"].rolling(window).corr(ret["SP"])
+
+    fig = go.Figure()
+
+    # Add BTC vs S&P line (Navy)
+    fig.add_trace(go.Scatter(
+        x=corr_btc_sp.index, y=corr_btc_sp, 
+        mode="lines",
+        name=f"{window}-Day BTC vs S&P",
+        line=dict(width=2, color="navy"),
+        hovertemplate="<br>".join([ # <-- UPDATED: Custom hovertemplate
+            "<b>Date: %{x|%b %Y}</b>",
+            "BTC vs S&P Corr: %{y:.2f}",
+            "<extra></extra>"
+        ])
+    ))
+    
+    # Add Gold vs S&P line (Gold)
+    fig.add_trace(go.Scatter(
+        x=corr_gold_sp.index, y=corr_gold_sp, 
+        mode="lines",
+        name=f"{window}-Day Gold vs S&P",
+        line=dict(width=2, color="gold"),
+        hovertemplate="<br>".join([ # <-- UPDATED: Custom hovertemplate
+            "<b>Date: %{x|%b %Y}</b>",
+            "Gold vs S&P Corr: %{y:.2f}",
+            "<extra></extra>"
+        ])
+    ))
+
+    # Dotted zero line
+    fig.add_hline(y=0, line_dash="dot", line_color="black")
+
+    fig.update_layout(
+        title=f"Rolling Correlations vs. S&P 500",
+        hovermode="x unified",
+        margin=dict(l=40, r=40, t=50, b=80),
+        yaxis=dict(range=[-1, 1]),
+        plot_bgcolor='white',
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.25,
+            xanchor="left",
+            x=0,
+            font=dict(size=12)
+        )
+    )
+    
+    fig.update_xaxes(
+        title_text="Date", 
+        showgrid=False, 
+        linecolor='black', 
+        mirror=True,
+        tickfont=dict(size=12)
+    )
+    fig.update_yaxes(
+        title_text="Correlation (ρ)", 
+        title_font=dict(size=16), 
+        showgrid=False,
+        linecolor='black',
+        mirror=True,
+        tickfont=dict(size=12)
+    )
+    return fig
+
+# ---------- Load data ----------
+gold = load_series(GOLD_FILE, "Gold")
+btc = load_series(BTC_FILE, "BTC")
+sp = load_series(SP_FILE, "SP")
+
+# ---------- Inline "A4" styles (no html.Style) ----------
+a4_style = {
+    "width": "210mm",
+    "minHeight": "297mm",
+    "margin": "8px auto",
+    "background": "white",
+    "boxShadow": "0 0 8px rgba(0,0,0,0.15)",
+    "padding": "10mm",
+    "boxSizing": "border-box",
+    "fontFamily": "system-ui, -apple-system, Segoe UI, Roboto, Arial",
+}
+header_style = {"display": "flex", "justifyContent": "space-between", "alignItems": "center", "marginBottom": "6mm"}
+title_style = {"fontSize": "18pt", "fontWeight": 700}
+btn_style = {"padding": "6px 10px", "border": "1px solid #ccc", "borderRadius": "8px", "cursor": "pointer", "background": "#fafafa"}
+row_style = {"display": "flex", "flexDirection": "column", "gap": "6mm"}
+card_style = {"border": "1px solid #e5e5e5", "borderRadius": "10px", "padding": "4mm"}
+h3_style = {"margin": "0 0 2mm 0", "fontSize": "12pt"}
+radio_style = {"display": "flex", "gap": "15px", "marginBottom": "2mm", "fontFamily": "system-ui, -apple-system, Segoe UI, Roboto, Arial"}
+slider_div_style = {"padding": "5mm 3mm 0mm 3mm"}
+
+# ---------- Dash App ----------
+app = Dash(__name__)
+app.layout = html.Div([
+    html.Div(id="a4", style=a4_style, children=[
+        html.Div(style=header_style, children=[
+            html.Div("Gold & Bitcoin — Mini Dashboard", style=title_style),
+            html.Button("Print / Save PDF", id="print-btn", style=btn_style)
+        ]),
+        html.Div(style=row_style, children=[
+            # --- TOP GRAPH ---
+            html.Div(style=card_style, children=[
+                html.H3("Prices", style=h3_style),
+                dcc.RadioItems(
+                    id='price-axis-toggle',
+                    options=[
+                        {'label': 'Linear Scale', 'value': 'Linear'},
+                        {'label': 'Logarithmic Scale', 'value': 'Log'},
+                    ],
+                    value='Linear', 
+                    style=radio_style,
+                    labelStyle={'display': 'inline-block', 'cursor': 'pointer'}
+                ),
+                dcc.Graph(
+                    id="fig-prices",
+                    figure=make_price_fig(gold, btc), 
+                    config={"displayModeBar": False},
+                    style={"height": "120mm"}
+                )
+            ]),
+            
+            # --- BOTTOM GRAPH ---
+            html.Div(style=card_style, children=[
+                html.H3(id="corr-title", style=h3_style),
+                html.Div(style=slider_div_style, children=[
+                    dcc.Slider(
+                        id='corr-slider',
+                        min=20,
+                        max=250,
+                        step=10,
+                        value=ROLL_DAYS,
+                        marks={i: str(i) for i in range(20, 251, 30)},
+                        tooltip={"placement": "bottom", "always_visible": True}
+                    )
+                ]),
+                dcc.Graph(
+                    id="fig-corr",
+                    figure=make_corr_fig(gold, btc, sp, ROLL_DAYS), 
+                    config={"displayModeBar": False},
+                    style={"height": "120mm"}
+                )
+            ])
+        ])
+    ]),
+    dcc.Store(id="noop")
+])
+
+# --- Callback for Price Graph ---
+@app.callback(
+    Output("fig-prices", "figure"),
+    Input("price-axis-toggle", "value")
+)
+def update_price_fig_callback(yaxis_type):
+    return make_price_fig(gold, btc, yaxis_type)
+
+# --- Callback for Correlation Graph ---
+@app.callback(
+    Output("fig-corr", "figure"),
+    Output("corr-title", "children"),
+    Input("corr-slider", "value")
+)
+def update_corr_fig_callback(window_size):
+    fig = make_corr_fig(gold, btc, sp, window_size)
+    title = f"{window_size}-Day Rolling Correlations vs. S&P 500"
+    return fig, title
+
+@app.callback(Output("noop", "data"), Input("print-btn", "n_clicks"), prevent_initial_call=True)
+def _noop(n):
+    return {}
+
+if __name__ == "__main__":
+    url = f"http://127.0.0.1:{APP_PORT}/"
+    print(f"--- Dash app running on {url} ---") # Explicitly print the URL
+    app.run(debug=True, port=APP_PORT)
+
