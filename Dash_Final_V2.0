@@ -1,0 +1,749 @@
+import os
+import numpy as np
+import pandas as pd
+from dash import Dash, html, dcc, Output, Input, State
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import math
+
+
+BASE_PATH = r"c:/Users/peter_bkbowcp/OneDrive/Desktop/Dashboard Project/"
+GOLD_FILE = os.path.join(BASE_PATH, "Gold Futures Historical Data.csv")
+BTC_FILE = os.path.join(BASE_PATH, "Bitcoin Historical Data.csv")
+SP_FILE = os.path.join(BASE_PATH, "S&P 500 Historical Data.csv")
+START_DATE = "2011-01-01"
+ROLL_DAYS = 90  
+APP_PORT = 8070 
+
+#Event Dictionary
+
+EVENTS_TO_PLOT = {
+    "Crypto Capitulation": "2018-11-14",
+    "COVID-19 Black Thursday": "2020-03-20",
+    "Russia invades Ukraine": "2022-02-24",
+    "Trump Liberation Day": "2025-04-02"
+}
+
+def _clean_num(s: pd.Series) -> pd.Series:
+    return (
+        s.astype(str)
+        .str.replace('"', '', regex=False)
+        .str.replace("'", "", regex=False)
+        .str.replace(",", "", regex=False)
+        .str.replace("\u2212", "-", regex=False)  
+        .str.strip()
+        .replace({"": np.nan, "None": np.nan})
+        .astype(float)
+    )
+
+def _find_date_col(df: pd.DataFrame) -> str:
+    for c in df.columns:
+        lc = c.strip().lower()
+        if lc in ("date", "time", "day") or "date" in lc:
+            return c
+    raise ValueError("No date column found.")
+
+def _find_close_col(df: pd.DataFrame) -> str:
+    candidates = ["Close", "Adj Close", "Close*", "Price", "Last", "Close/Last"]
+    for c in df.columns:
+        if c.strip() in candidates or c.strip().lower() in [x.lower() for x in candidates]:
+            return c
+    # Fallback: first numeric-like column that's not the date
+    for c in df.columns:
+        if c.lower() != "date":
+            try:
+                pd.to_numeric(df[c].astype(str).str.replace(",", ""), errors="raise")
+                return c
+            except Exception:
+                pass
+    raise ValueError("No price/close column found.")
+
+def load_series(path: str, label: str) -> pd.DataFrame:
+    if not os.path.exists(path):
+        print(f"WARNING: File not found at {path}. Returning empty DataFrame for {label}.")
+        return pd.DataFrame(columns=[label]).set_index(pd.to_datetime([])) 
+        
+    df = pd.read_csv(path)
+    df.columns = [c.strip() for c in df.columns]
+    dcol = _find_date_col(df)
+    ccol = _find_close_col(df)
+    df["Date"] = pd.to_datetime(df[dcol].astype(str).str.strip(), errors="coerce")
+    df[label] = _clean_num(df[ccol])
+    df = df[["Date", label]].dropna().sort_values("Date")
+    df = df[df["Date"] >= START_DATE].set_index("Date")
+    return df
+
+def make_price_fig(
+    gold: pd.DataFrame, 
+    btc: pd.DataFrame, 
+    yaxis_type: str = "Linear",
+    visible_events: list = [] 
+) -> go.Figure:
+    
+    joined = gold.join(btc, how="inner").dropna()
+    if joined.empty:
+        return go.Figure().update_layout(title="No overlapping Gold/BTC data")
+        
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(
+        go.Scatter(
+            x=joined.index, y=joined["Gold"],
+            name="Gold (USD / oz)",
+            mode="lines",
+            line=dict(width=2, color="gold"),
+            hovertemplate="<br>".join([
+                "<b>Date: %{x|%b %Y}</b>",
+                "Gold (USD / oz): $%{y:.2f}",
+                "<extra></extra>"
+            ])
+        ),
+        secondary_y=False
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=joined.index, y=joined["BTC"],
+            name="Bitcoin (USD / BTC)",
+            mode="lines",
+            line=dict(width=2, color="navy"),
+            hovertemplate="<br>".join([
+                "<b>Date: %{x|%b %Y}</b>",
+                "Bitcoin (USD / BTC): $%{y:.2f}",
+                "<extra></extra>"
+            ])
+        ),
+        secondary_y=True
+    )
+
+    axis_type_str = "log" if yaxis_type == "Log" else "linear"
+    log_dtick = 1 if axis_type_str == "log" else None
+    show_ticks = True #if axis_type_str == "linear" else False # Always show
+
+    # --- Fixed Axis Ranging ---
+    y1_min_data, y1_max_data = joined["Gold"].min(), joined["Gold"].max()
+    y2_min_data, y2_max_data = joined["BTC"].min(), joined["BTC"].max()
+    y1_pad = (y1_max_data - y1_min_data) * 0.05
+    y2_pad = (y2_max_data - y2_min_data) * 0.05
+    y1_range_linear = [y1_min_data - y1_pad, y1_max_data + y1_pad]
+    y2_range_linear = [y2_min_data - y2_pad, y2_max_data + y2_pad]
+    y1_min_log = max(y1_min_data * 0.95, 1) 
+    y2_min_log = max(y2_min_data * 0.95, 1) 
+    y1_range_log = [math.log10(y1_min_log), math.log10(y1_max_data * 1.05)]
+    y2_range_log = [math.log10(y2_min_log), math.log10(y2_max_data * 1.05)]
+    y1_range = y1_range_log if axis_type_str == "log" else y1_range_linear
+    y2_range = y2_range_log if axis_type_str == "log" else y2_range_linear
+    # ---------------------------------
+
+    fig.update_layout(
+        title="Gold & Bitcoin Growth",
+        hovermode="x unified",
+        margin=dict(l=40, r=40, t=50, b=80),
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.25,
+            xanchor="left",
+            x=0,
+            font=dict(size=24) # --- MODIFIED: Font size ---
+        ),
+        plot_bgcolor='white',
+    )
+
+    fig.update_xaxes(
+        title_text="Date", 
+        title_font=dict(size=22), # --- MODIFIED: Font size ---
+        showgrid=False, 
+        linecolor='black', 
+        mirror=True,
+        tickfont=dict(size=20) # --- MODIFIED: Font size ---
+    )
+    fig.update_yaxes(
+        title_text="Gold (USD / oz)", 
+        title_font=dict(size=26, color="gold"), # --- MODIFIED: Font size ---
+        secondary_y=False, 
+        showgrid=False,
+        linecolor='black',
+        mirror=True,
+        type=axis_type_str,
+        dtick=log_dtick,
+        tickfont=dict(size=22), # --- MODIFIED: Font size ---
+        showticklabels=show_ticks,
+        range=y1_range 
+    )
+    fig.update_yaxes(
+        title_text="Bitcoin (USD / BTC)", 
+        title_font=dict(size=26, color="navy"), # --- MODIFIED: Font size ---
+        secondary_y=True, 
+        showgrid=False,
+        linecolor='black',
+        mirror=True,
+        type=axis_type_str,
+        dtick=log_dtick,
+        tickfont=dict(size=22), # --- MODIFIED: Font size ---
+        showticklabels=show_ticks,
+        range=y2_range 
+    )
+    
+    # --- ADD EVENTS (from checklist) ---
+    for event_name in visible_events:
+        if event_name in EVENTS_TO_PLOT:
+            event_date = EVENTS_TO_PLOT[event_name]
+            try:
+                fig.add_vline(
+                    x=pd.to_datetime(event_date),
+                    line_width=1,
+                    line_dash="dot",
+                    line_color="black"
+                )
+                fig.add_annotation(
+                    x=pd.to_datetime(event_date),
+                    y=0.95, 
+                    yref="paper",
+                    text=event_name,
+                    showarrow=False,
+                    font=dict(size=18, color="black"), # --- MODIFIED: Font size ---
+                    bgcolor="rgba(255, 255, 255, 0.7)",
+                    bordercolor="black",
+                    borderwidth=1,
+                    xanchor="center",
+                    yanchor="bottom"
+                )
+            except Exception as e:
+                print(f"Could not plot event '{event_name}' at '{event_date}': {e}")
+            
+    return fig
+
+# --- Correlation Figure Function ---
+def make_corr_fig(gold: pd.DataFrame, btc: pd.DataFrame, sp: pd.DataFrame, window: int) -> go.Figure:
+    ret_gold = gold['Gold'].pct_change().rename('Gold')
+    ret_btc = btc['BTC'].pct_change().rename('BTC')
+    ret_sp = sp['SP'].pct_change().rename('SP')
+    ret = pd.concat([ret_gold, ret_btc, ret_sp], axis=1).dropna()
+    
+    if ret.empty:
+        return go.Figure().update_layout(title="No overlapping data for correlations")
+
+    corr_gold_sp = ret["Gold"].rolling(window).corr(ret["SP"])
+    corr_btc_sp = ret["BTC"].rolling(window).corr(ret["SP"])
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=corr_gold_sp.index, y=corr_gold_sp, 
+        mode="lines",
+        name=f"{window}-Day Gold vs S&P",
+        line=dict(width=2, color="gold"),
+        hovertemplate="<br>".join([
+            "<b>Date: %{x|%b %Y}</b>",
+            "Gold vs S&P Corr: %{y:.2f}",
+            "<extra></extra>"
+        ])
+    ))
+    fig.add_trace(go.Scatter(
+        x=corr_btc_sp.index, y=corr_btc_sp, 
+        mode="lines",
+        name=f"{window}-Day BTC vs S&P",
+        line=dict(width=2, color="navy"),
+        hovertemplate="<br>".join([
+            "<b>Date: %{x|%b %Y}</b>",
+            "BTC vs S&P Corr: %{y:.2f}",
+            "<extra></extra>"
+        ])
+    ))
+
+    fig.add_hline(y=0, line_dash="dot", line_color="black")
+
+    fig.update_layout(
+        title=f"Rolling Correlations vs S&P 500",
+        hovermode="x unified",
+        margin=dict(l=40, r=40, t=50, b=80),
+        yaxis=dict(range=[-1, 1]),
+        plot_bgcolor='white',
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.25,
+            xanchor="left",
+            x=0,
+            font=dict(size=24) # --- MODIFIED: Font size ---
+        )
+    )
+    
+    fig.update_xaxes(
+        title_text="Date", 
+        title_font=dict(size=22), # --- MODIFIED: Font size ---
+        showgrid=False, 
+        linecolor='black', 
+        mirror=True,
+        tickfont=dict(size=20) # --- MODIFIED: Font size ---
+    )
+    fig.update_yaxes(
+        title_text="Correlation (ρ)", 
+        title_font=dict(size=24), # --- MODIFIED: Font size ---
+        showgrid=False,
+        linecolor='black',
+        mirror=True,
+        tickfont=dict(size=20) # --- MODIFIED: Font size ---
+    )
+    return fig
+
+# --- Volatility Figure Function ---
+def make_vol_fig(gold: pd.DataFrame, btc: pd.DataFrame, window: int) -> go.Figure:
+    ret_gold = gold['Gold'].pct_change().rename('Gold')
+    ret_btc = btc['BTC'].pct_change().rename('BTC')
+    ret = pd.concat([ret_gold, ret_btc], axis=1).dropna()
+    
+    if ret.empty:
+        return go.Figure().update_layout(title="No overlapping data for Volatility")
+
+    vol_gold = ret["Gold"].rolling(window).std() * np.sqrt(252)
+    vol_btc = ret["BTC"].rolling(window).std() * np.sqrt(252)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=vol_gold.index, y=vol_gold, 
+        mode="lines",
+        name=f"{window}-Day Volatility (Gold)",
+        line=dict(width=2, color="gold"),
+        hovertemplate="<br>".join([
+            "<b>Date: %{x|%b %Y}</b>",
+            "Gold Volatility: %{y:.2%}", 
+            "<extra></extra>"
+        ])
+    ))
+    fig.add_trace(go.Scatter(
+        x=vol_btc.index, y=vol_btc, 
+        mode="lines",
+        name=f"{window}-Day Volatility (BTC)",
+        line=dict(width=2, color="navy"),
+        hovertemplate="<br>".join([
+            "<b>Date: %{x|%b %Y}</b>",
+            "BTC Volatility: %{y:.2%}", 
+            "<extra></extra>"
+        ])
+    ))
+
+    fig.update_layout(
+        title=f"{window}-Day Rolling Volatility (Annualised)",
+        hovermode="x unified",
+        margin=dict(l=40, r=40, t=50, b=80),
+        yaxis=dict(tickformat=".0%"), 
+        plot_bgcolor='white',
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.25,
+            xanchor="left",
+            x=0,
+            font=dict(size=24) # --- MODIFIED: Font size ---
+        )
+    )
+    
+    fig.update_xaxes(
+        title_text="Date", 
+        title_font=dict(size=22), # --- MODIFIED: Font size ---
+        showgrid=False, 
+        linecolor='black', 
+        mirror=True,
+        tickfont=dict(size=20) # --- MODIFIED: Font size ---
+    )
+    fig.update_yaxes(
+        title_text="Volatility (Annualised)", 
+        title_font=dict(size=24), # --- MODIFIED: Font size ---
+        showgrid=False,
+        linecolor='black',
+        mirror=True,
+        tickfont=dict(size=20) # --- MODIFIED: Font size ---
+    )
+    return fig
+
+
+# ---------- Load data ----------
+gold = load_series(GOLD_FILE, "Gold")
+btc = load_series(BTC_FILE, "BTC")
+sp = load_series(SP_FILE, "SP")
+
+# ---------- Inline Styles ----------
+main_container_style = {
+    "maxWidth": "1600px",
+    "margin": "10px auto", 
+    "padding": "15px", 
+    "background": "#f9f9f9", # --- MODIFIED: Light grey background ---
+    "boxShadow": "0 0 10px rgba(0,0,0,0.1)",
+    "borderRadius": "10px",
+    "fontFamily": "system-ui, -apple-system, Segoe UI, Roboto, Arial",
+    "boxSizing": "border-box"
+}
+
+header_style = {"display": "flex", "justifyContent": "space-between", "alignItems": "center", "marginBottom": "10px", "paddingBottom": "10px", "borderBottom": "1px solid #eee"}
+title_style = {
+    "fontSize": "36pt", # --- MODIFIED: Font size ---
+    "fontWeight": 700,
+    "color": "#2C3E50" # --- MODIFIED: Professional dark color ---
+}
+btn_style = {"padding": "8px 12px", "border": "1px solid #ccc", "borderRadius": "8px", "cursor": "pointer", "background": "#fafafa", "fontSize": "20px"} # --- MODIFIED: Font size ---
+
+# --- Grid system for vertical logos ---
+logo_grid_style = {
+    "display": "grid",
+    "gridTemplateColumns": "1fr", 
+    "gridTemplateRows": "repeat(3, 1fr)", 
+    "gap": "15px", 
+    "width": "200px", 
+    "marginRight": "20px", 
+    "flexShrink": 0,
+    "alignItems": "center", 
+}
+graph_card_style = {
+    "border": "1px solid #e0e0e0", # --- MODIFIED: Cleaner border ---
+    "borderRadius": "10px", 
+    "padding": "15px", 
+    "display": "flex",
+    "flexDirection": "column",
+    "boxSizing": "border-box",
+    "background": "white" # --- MODIFIED: White card background ---
+}
+
+h3_style = {"margin": "0 0 10px 0", "fontSize": "28pt"} # --- MODIFIED: Font size ---
+radio_style = {"display": "flex", "gap": "15px", "marginBottom": "10px", "fontFamily": "system-ui, -apple-system, Segoe UI, Roboto, Arial", "fontSize": "20px"} # --- MODIFIED: Font size ---
+slider_div_style = {"padding": "15px 10px 5px 10px"} 
+
+# --- Compact Toggle Styles ---
+h4_style = {"margin": "0 0 1mm 0", "fontSize": "18pt", "fontWeight": 600} # --- MODIFIED: Font size ---
+checklist_style = {"display": "flex", "gap": "10px", "flexWrap": "wrap"}
+# ----------------------------------
+
+# --- Logo & Modal Styles (Image as card) ---
+logo_image_style = {
+    "width": "100%", 
+    "height": "160px", 
+    "cursor": "pointer", 
+    "borderRadius": "10px",
+    "objectFit": "cover", 
+    "border": "1px solid #e0e0e0", # --- MODIFIED: Cleaner border ---
+    "background": "white", # --- MODIFIED: White card background ---
+    "padding": "5px",
+    "transition": "box-shadow 0.2s ease-in-out",
+}
+
+modal_content_style = {
+    "padding": "10px 20px 20px 20px",
+    "fontFamily": "system-ui, -apple-system, Segoe UI, Roboto, Arial",
+    "maxWidth": "600px", 
+    "margin": "0 auto",
+    "fontSize": "20px" # --- MODIFIED: Font size ---
+}
+modal_header_style = {
+    "fontSize": "30pt", # --- MODIFIED: Font size ---
+    "fontWeight": 600, 
+    "borderBottom": "1px solid #ddd", 
+    "paddingBottom": "10px",
+    "marginBottom": "10px"
+}
+modal_close_btn_style = {
+    **btn_style, 
+    "marginTop": "20px",
+    "background": "#eee"
+}
+
+# --- Styles for HTML-based Modal ---
+modal_base_style = {
+    'position': 'fixed',
+    'top': 0,
+    'left': 0,
+    'width': '100%',
+    'height': '100%',
+    'background': 'rgba(0, 0, 0, 0.5)', 
+    'zIndex': 1000, 
+    'paddingTop': '100px', 
+    'overflowY': 'auto'
+}
+modal_content_wrapper_style = {
+    'background': 'white',
+    'maxWidth': '700px', 
+    'margin': '0 auto',
+    'borderRadius': '10px',
+    'boxShadow': '0 4px 8px rgba(0,0,0,0.2)',
+}
+
+modal_hidden_style = {**modal_base_style, 'display': 'none'} 
+modal_visible_style = {**modal_base_style, 'display': 'block'} 
+# ----------------------------------
+
+
+# ---------- Dash App ----------
+app = Dash(__name__)
+app.layout = html.Div([
+    html.Div(id="main-container", style=main_container_style, children=[
+        html.Div(style=header_style, children=[
+            html.Div("Gold Vs Bitcoin: Analysis of Returns, Correlations and Volatility", style=title_style),
+        ]),
+        
+        html.Div(style={"display": "flex", "gap": "20px", "marginTop": "15px"}, children=[
+            # --- Vertical Logo Grid Layout (Left) ---
+            html.Div(style=logo_grid_style, children=[
+                html.Img(
+                    id="logo-project", 
+                    src=app.get_asset_url("project-logo.png"), 
+                    style=logo_image_style
+                ),
+                html.Img(
+                    id="logo-gold", 
+                    src=app.get_asset_url("gold-logo.png"), 
+                    style=logo_image_style
+                ),
+                html.Img(
+                    id="logo-btc", 
+                    src=app.get_asset_url("btc-logo.png"), 
+                    style=logo_image_style
+                ),
+            ]),
+            
+            # --- Tabbed Layout (Right) ---
+            html.Div(style={"flexGrow": 1}, children=[ 
+                dcc.Tabs(id="main-tabs", value='tab-price', children=[
+                    
+                    # --- Tab 1: Prices ---
+                    dcc.Tab(label='Returns', value='tab-price', 
+                            style={'fontSize': '22px', 'padding': '10px'}, # --- MODIFIED: Font size ---
+                            selected_style={'fontSize': '22px', 'padding': '10px'}, # --- MODIFIED: Font size ---
+                            children=[
+                        html.Div(style=graph_card_style, children=[
+                            html.H3("Asset Growth", style=h3_style),
+                            dcc.RadioItems(
+                                id='price-axis-toggle',
+                                options=[
+                                    {'label': 'Linear Scale', 'value': 'Linear'},
+                                    {'label': 'Logarithmic Scale', 'value': 'Log'},
+                                ],
+                                value='Linear', 
+                                style=radio_style,
+                                labelStyle={'display': 'inline-block', 'cursor': 'pointer', 'fontSize': '20px'} # --- MODIFIED: Font size ---
+                            ),
+                            # --- Event Toggles ---
+                            html.Div([
+                                html.H4("Toggle Events:", style=h4_style),
+                                dcc.Checklist(
+                                    id='event-checklist',
+                                    options=[{'label': k, 'value': k} for k in EVENTS_TO_PLOT.keys()],
+                                    value=[], 
+                                    style=checklist_style,
+                                    labelStyle={'fontSize': '18pt', 'cursor': 'pointer'} # --- MODIFIED: Font size ---
+                                )
+                            ], style={"padding": "5px 0 10px 0"}),
+                            
+                            dcc.Graph(
+                                id="fig-prices",
+                                figure=make_price_fig(gold, btc, 'Linear', []), 
+                                config={"displayModeBar": False},
+                                style={"height": "550px"}
+                            )
+                        ])
+                    ]),
+                    
+                    # --- Tab 2: Correlation ---
+                    dcc.Tab(label='Rolling Correlation', value='tab-corr', 
+                            style={'fontSize': '22px', 'padding': '10px'}, # --- MODIFIED: Font size ---
+                            selected_style={'fontSize': '22px', 'padding': '10px'}, # --- MODIFIED: Font size ---
+                            children=[
+                        html.Div(style=graph_card_style, children=[
+                            html.H3(id="corr-title", style=h3_style),
+                            html.Div(style=slider_div_style, children=[
+                                dcc.Slider(
+                                    id='corr-slider',
+                                    min=20, max=250, step=1, 
+                                    value=ROLL_DAYS,
+                                    marks={i: str(i) for i in range(20, 251, 30)},
+                                    tooltip={"placement": "bottom", "always_visible": True},
+                                    updatemode='drag' 
+                                )
+                            ]),
+                            dcc.Graph(
+                                id="fig-corr",
+                                figure=make_corr_fig(gold, btc, sp, ROLL_DAYS), 
+                                config={"displayModeBar": False},
+                                style={"height": "550px"}
+                            )
+                        ])
+                    ]),
+                    
+                    # --- Tab 3: Volatility ---
+                    dcc.Tab(label='Rolling Volatility', value='tab-vol', 
+                            style={'fontSize': '22px', 'padding': '10px'}, # --- MODIFIED: Font size ---
+                            selected_style={'fontSize': '22px', 'padding': '10px'}, # --- MODIFIED: Font size ---
+                            children=[
+                        html.Div(style=graph_card_style, children=[
+                            html.H3(id="vol-title", style=h3_style),
+                            html.Div(style=slider_div_style, children=[
+                                dcc.Slider(
+                                    id='vol-slider', 
+                                    min=20, max=250, step=1, 
+                                    value=ROLL_DAYS,
+                                    marks={i: str(i) for i in range(20, 251, 30)},
+                                    tooltip={"placement": "bottom", "always_visible": True},
+                                    updatemode='drag'
+                                )
+                            ]),
+                            dcc.Graph(
+                                id="fig-vol", 
+                                figure=make_vol_fig(gold, btc, ROLL_DAYS), 
+                                config={"displayModeBar": False},
+                                style={"height": "550px"}
+                            )
+                        ])
+                    ])
+                ])
+            ]) 
+        ]), 
+    ]),
+    
+    # --- MODALS ---
+    html.Div(
+        id="modal-gold",
+        style=modal_hidden_style, 
+        children=[
+            html.Div(style=modal_content_wrapper_style, children=[
+                html.Div(style=modal_content_style, children=[
+                    html.H3("Gold - Asset Overview", style=modal_header_style),
+                    html.P("Gold is a safe-haven asset and storer of value, often used to preserve wealth during inflationary or unstable market periods."),
+                    html.P([html.Strong("Performance - "), "Delivers steady real returns over time, tending to outperform during market downturns and inflation spikes."]),
+                    html.P([html.Strong("Volatility - "), "Moderately Volatile mainly driven by macroeconomic and geopolitical shifts, less volatile than equities but more volatile than bonds."]),
+                    html.P([html.Strong("Portfolio Role - "), "Provides diversification and capital protection,  acting a hedge against monetary or systemic risk."]),
+                    html.P([html.Strong("Correlation - "), "Typically low or negative versus risky assets, enhancing portfolio resilience through market downturns."]),
+                    html.P([html.Strong("Bull Case - "), "Gold thrives as global debt piles up and central banks keep buying it."]),
+                    html.P([html.Strong("Bear Case - "), "Rising real interest rates and strong economic growth reduces its appeal versus high growth assets."]),
+
+             html.Button("Close", id="close-modal-gold", style=modal_close_btn_style)
+                ])
+            ])
+        ]
+    ),
+    
+    html.Div(
+        id="modal-btc",
+        style=modal_hidden_style, 
+        children=[
+            html.Div(style=modal_content_wrapper_style, children=[
+                html.Div(style=modal_content_style, children=[
+                    html.H3("Bitcoin - Asset Overview", style=modal_header_style),
+                    html.P("Bitcoin is a digital asset and decentralised store of value, often viewed as “digital gold” due to its fixed supply and independence from central banks."),
+                    html.P([html.Strong("Performance - "), "Extremely strong long-term returns but with high drawdowns and volatility."]),
+                    html.P([html.Strong("Volatility - "), "Highly volatile cryptocurrency driven by market sentiment, liquidity shifts and regulatory news."]),
+                    html.P([html.Strong("Portfolio Role - "), "Offers robust growth potential and diversification, but adds significant risk exposure."]),
+                    html.P([html.Strong("Correlation - "), "Historically low correlation with traditional assets, though this varies during market stress."]),
+                    html.P([html.Strong("Bull Case - "), "Crypto is the future!"]),
+                    html.P([html.Strong("Bear Case - "), "Crypto prices are driven by hype and leverage, not fundamental valuations!"]),
+                    
+                    html.Button("Close", id="close-modal-btc", style=modal_close_btn_style)
+                ])
+            ])
+        ]
+    ),
+
+    html.Div(
+        id="modal-project",
+        style=modal_hidden_style, 
+        children=[
+            html.Div(style=modal_content_wrapper_style, children=[
+                html.Div(style=modal_content_style, children=[
+                    html.H3("Dashboard Overview", style=modal_header_style),
+                    html.P("This dashboard analyses the relationship between Gold and Bitcoin, comparing their price growth, rolling volatility and correlation to the market."),
+                    html.P("Use the tabs to explore different metrics:"),
+                    html.Ul([
+                        html.Li([
+    html.Strong("Growth -  "),
+    "Compare price charts on a linear or log scale, toggle major macro shocks and find price of each asset on any given day."
+]),
+html.Li([
+    html.Strong("Correlation -  "),
+    "Analyse how the assets move relative to the stock market (S&P 500) over time."
+]),
+html.Li([
+    html.Strong("Volatility - "),
+    "Analyse the (annualised) risk profile of each asset."
+])
+                    ]),
+                    html.Button("Close", id="close-modal-project", style=modal_close_btn_style)
+                ])
+            ])
+        ]
+    ),
+    
+    dcc.Store(id="noop") 
+])
+
+# --- Callback for Price Graph (now with Events) ---
+@app.callback(
+    Output("fig-prices", "figure"),
+    Input("price-axis-toggle", "value"),
+    Input("event-checklist", "value") 
+)
+def update_price_fig_callback(yaxis_type, selected_events):
+    return make_price_fig(gold, btc, yaxis_type, selected_events)
+
+# --- Callback for Correlation Graph ---
+@app.callback(
+    Output("fig-corr", "figure"),
+    Output("corr-title", "children"),
+    Input("corr-slider", "value")
+)
+def update_corr_fig_callback(window_size):
+    fig = make_corr_fig(gold, btc, sp, window_size)
+    title = f"{window_size}-Day Rolling Correlations Vs S&P 500"
+    return fig, title
+
+# --- Callback for Volatility Graph ---
+@app.callback(
+    Output("fig-vol", "figure"),
+    Output("vol-title", "children"),
+    Input("vol-slider", "value")
+)
+def update_vol_fig_callback(window_size):
+    fig = make_vol_fig(gold, btc, window_size)
+    title = f"{window_size}-Day Rolling Volatility (Annualised)"
+    return fig, title
+
+# --- Callbacks for Modals (toggle style) ---
+@app.callback(
+    Output("modal-gold", "style"),
+    Input("logo-gold", "n_clicks"),
+    Input("close-modal-gold", "n_clicks"),
+    State("modal-gold", "style"),
+    prevent_initial_call=True
+)
+def toggle_modal_gold(n_open, n_close, current_style):
+    if current_style and current_style.get('display') == 'none':
+        return modal_visible_style 
+    else:
+        return modal_hidden_style 
+
+@app.callback(
+    Output("modal-btc", "style"),
+    Input("logo-btc", "n_clicks"),
+    Input("close-modal-btc", "n_clicks"),
+    State("modal-btc", "style"),
+    prevent_initial_call=True
+)
+def toggle_modal_btc(n_open, n_close, current_style):
+    if current_style and current_style.get('display') == 'none':
+        return modal_visible_style 
+    else:
+        return modal_hidden_style 
+
+# --- NEW Callback for Project Modal ---
+@app.callback(
+    Output("modal-project", "style"),
+    Input("logo-project", "n_clicks"),
+    Input("close-modal-project", "n_clicks"),
+    State("modal-project", "style"),
+    prevent_initial_call=True
+)
+def toggle_modal_project(n_open, n_close, current_style):
+    if current_style and current_style.get('display') == 'none':
+        return modal_visible_style 
+    else:
+        return modal_hidden_style 
+# ---------------------------------
+
+if __name__ == "__main__":
+    url = f"http://127.0.0.1:{APP_PORT}/"
+    print(f"--- Dash app running on {url} ---") 
+    app.run(debug=True, port=APP_PORT)
